@@ -1,0 +1,26 @@
+# Virtual Environments
+venv/
+env/
+.env
+.venv/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE and OS Files
+.DS_Store
+.idea/
+.vscode/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# Project Specific (Large Datasets & Logs)
+*.pth
+*.png
+*.html
+# evaluation_log.txt
+DVSE_Implementation/data/
+*.zip
