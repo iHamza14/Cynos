@@ -15,9 +15,9 @@ def extract_features(window_data):
             float(np.std(axis)),
             float(np.max(axis)),
             float(np.min(axis)),
-            float(np.sqrt(np.mean(axis**2))),  # RMS
-            float(skew(axis)) if len(axis) > 0 else 0.0,
-            float(kurtosis(axis)) if len(axis) > 0 else 0.0,
+            float(np.sqrt(np.mean(axis**2))),
+            float(np.clip(skew(axis), -10, 10)),
+            float(np.clip(kurtosis(axis), -10, 10)),  # ← clip both
         ])
     return features
 
@@ -126,7 +126,7 @@ def bin_dataset(df_s, df_v):
             'mtn_input': int_acc.tolist() + avg_grav.tolist(),
             'raw_accel': avg_acc.tolist(),
             'gravity': avg_grav.tolist(),
-            'mobile_gps_speed': float(group[mobile_speed_col].mean()) / 3.6,
+            'mobile_gps_speed': float(group[mobile_speed_col].mean()), 
             'v_odo_speed': float(group['v_odo_speed'].mean()),
             'v_lat': float(group['v_Latitude (degrees)'].mean()),
             'v_lon': float(group['v_Longitude (degrees)'].mean()),
@@ -202,8 +202,8 @@ def build_windows(bins, window_sec=60, step_sec=15):
     return windows
 
 if __name__ == '__main__':
-    s_path = '/Users/hamza/SIH/IO-VNBD/Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/S-Vw4.csv'
-    v_path = '/Users/hamza/SIH/IO-VNBD/Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/V-Vw4.csv'
+    s_path = '/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/S-Vw4.csv'
+    v_path = '/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/V-Vw4.csv'
     
     df_s = pd.read_csv(s_path, encoding='latin-1')
     df_s.columns = df_s.columns.str.strip()
