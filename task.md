@@ -1,0 +1,16 @@
+- [x] Create `DVSE_DeadReckoning` directory
+- [x] Implement `data_pipeline.py`
+  - [x] Implement `estimate_wheel_radius`
+  - [x] Implement `bin_dataset`
+  - [x] Implement `build_windows` with filtering and haversine targets
+  - [x] Save output tensors to disk
+- [x] Implement `dataset.py`
+  - [x] Implement `DeadReckoningDataset`
+  - [x] Implement `StandardScaler` integration
+- [x] Implement `models.py`
+  - [x] Adjust `DVSE` to exact `forward` signature
+- [x] Implement `train.py`
+  - [x] Implement custom `loss_fn` with `loss_disp` and `loss_euler`
+  - [x] Write `train_step` using `vr_train`
+- [x] Implement `inference.py`
+  - [x] Write `inference_step` with autoregressive `vr`
