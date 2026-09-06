@@ -15,9 +15,9 @@ def extract_features(window_data):
             float(np.std(axis)),
             float(np.max(axis)),
             float(np.min(axis)),
-            float(np.sqrt(np.mean(axis**2))),  # RMS
-            float(skew(axis)) if len(axis) > 0 else 0.0,
-            float(kurtosis(axis)) if len(axis) > 0 else 0.0,
+            float(np.sqrt(np.mean(axis**2))),
+            float(np.clip(skew(axis), -10, 10)),
+            float(np.clip(kurtosis(axis), -10, 10)),  # ← clip both
         ])
     return features
 
@@ -126,7 +126,7 @@ def bin_dataset(df_s, df_v):
             'mtn_input': int_acc.tolist() + avg_grav.tolist(),
             'raw_accel': avg_acc.tolist(),
             'gravity': avg_grav.tolist(),
-            'mobile_gps_speed': float(group[mobile_speed_col].mean()) / 3.6,
+            'mobile_gps_speed': float(group[mobile_speed_col].mean()), 
             'v_odo_speed': float(group['v_odo_speed'].mean()),
             'v_lat': float(group['v_Latitude (degrees)'].mean()),
             'v_lon': float(group['v_Longitude (degrees)'].mean()),
@@ -202,8 +202,8 @@ def build_windows(bins, window_sec=60, step_sec=15):
     return windows
 
 if __name__ == '__main__':
-    s_path = '/Users/hamza/SIH/IO-VNBD/Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/S-Vw4.csv'
-    v_path = '/Users/hamza/SIH/IO-VNBD/Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/V-Vw4.csv'
+    s_path = '../Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/S-Vw4.csv'
+    v_path = '../Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/V-Vw4.csv'
     
     df_s = pd.read_csv(s_path, encoding='latin-1')
     df_s.columns = df_s.columns.str.strip()
@@ -223,8 +223,28 @@ if __name__ == '__main__':
     
     print(f"Generated {len(train_windows)} train windows and {len(test_windows)} test windows.")
     
+    # Fit StandardScaler on training data
+    from sklearn.preprocessing import StandardScaler
+    
+    all_acc = np.vstack([w['acc_feat'] for w in train_windows])
+    all_gyro = np.vstack([w['gyro_feat'] for w in train_windows])
+    all_mtn = np.vstack([w['mtn_input'] for w in train_windows])
+    all_raw = np.vstack([w['raw_accel'] for w in train_windows])
+    all_grav = np.vstack([w['gravity'] for w in train_windows])
+    
+    scalers = {
+        'acc': StandardScaler().fit(all_acc),
+        'gyro': StandardScaler().fit(all_gyro),
+        'mtn': StandardScaler().fit(all_mtn),
+        'raw': StandardScaler().fit(all_raw),
+        'grav': StandardScaler().fit(all_grav)
+    }
+    
     os.makedirs('data', exist_ok=True)
     with open('data/train_windows.pkl', 'wb') as f:
         pickle.dump(train_windows, f)
     with open('data/test_windows.pkl', 'wb') as f:
         pickle.dump(test_windows, f)
+    with open('data/scalers.pkl', 'wb') as f:
+        pickle.dump(scalers, f)
+    print("Saved windows and scaler to data/ directory.")
