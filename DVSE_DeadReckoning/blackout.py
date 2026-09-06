@@ -108,10 +108,6 @@ def build_blackout_windows(bins, blackout_durations=BLACKOUT_DURATIONS,
                 'gravity':   np.stack([b['gravity']   for b in context_bins]),   # (10, 3)
 
                 # Seed values — last known state before blackout
-                'last_speed_ms':   float(last_ctx['v_odo_speed']),               # m/s
-                'last_heading_rad': float(np.radians(last_ctx['v_heading'])),
-                'last_lat':        float(last_ctx['v_lat']),
-                'last_lon':        float(last_ctx['v_lon']),
                 'vr_seed':         float(last_ctx['mobile_gps_speed']),          # teacher-force seed
             }
 
@@ -121,6 +117,7 @@ def build_blackout_windows(bins, blackout_durations=BLACKOUT_DURATIONS,
                 'gyro_feat': np.stack([b['gyro_feat'] for b in blackout_bins]),  # (N, 18)
                 'mtn_input': np.stack([b['mtn_input'] for b in blackout_bins]),  # (N, 6)
                 'raw_accel': np.stack([b['raw_accel'] for b in blackout_bins]),  # (N, 3)
+                'raw_gyro':  np.stack([b.get('raw_gyro', [0,0,0]) for b in blackout_bins]),  # (N, 3)
                 'gravity':   np.stack([b['gravity']   for b in blackout_bins]),  # (N, 3)
             }
 
@@ -128,7 +125,13 @@ def build_blackout_windows(bins, blackout_durations=BLACKOUT_DURATIONS,
             gt_cum_disp   = cumulative_displacement(blackout_bins)               # (N, 2) metres N/E
             gt_speeds     = np.array([b['v_odo_speed'] for b in blackout_bins]) # (N,) m/s
             gt_headings   = np.array([np.radians(b['v_heading']) for b in blackout_bins])  # (N,) rad
-            gt_delta_v    = np.array([b['v_delta_speed'] for b in blackout_bins])          # (N,)
+            
+            # The speed change must be per-second, not the mean of 100Hz micro-changes!
+            gt_delta_v    = np.zeros(blackout_dur)
+            gt_delta_v[0] = gt_speeds[0] - context['vr_seed']
+            if blackout_dur > 1:
+                gt_delta_v[1:] = np.diff(gt_speeds)
+            
             total_dist    = total_distance_m(blackout_bins)                      # scalar metres
 
             # Per-timestep drift constraint reference
@@ -145,7 +148,9 @@ def build_blackout_windows(bins, blackout_durations=BLACKOUT_DURATIONS,
                 'delta_v':             gt_delta_v,            # (N,)
                 'total_distance_m':    total_dist,            # scalar
                 'cumulative_dist_m':   cumulative_dist_per_step,  # (N,) for % drift calc
-                # Endpoint for quick sanity check
+                # Endpoints for plotting
+                'start_lat': float(blackout_bins[0]['v_lat']),
+                'start_lon': float(blackout_bins[0]['v_lon']),
                 'end_lat':   float(blackout_bins[-1]['v_lat']),
                 'end_lon':   float(blackout_bins[-1]['v_lon']),
             }
@@ -182,7 +187,7 @@ def score_blackout_window(window, dr_positions_ne):
     errors = np.linalg.norm(dr_positions_ne - gt, axis=1)  # (N,)
 
     # Drift as % of distance travelled at that moment
-    pct_drift = np.where(dist > 0, errors / dist * 100, 0.0)
+    pct_drift = np.divide(errors, dist, out=np.zeros_like(errors), where=dist!=0) * 100
 
     return {
         'mean_error_m':       float(errors.mean()),
@@ -212,11 +217,38 @@ if __name__ == '__main__':
     # Chronological split — blackout windows come from TEST bins only
     # You never evaluate DR on data the model trained on
     split_idx = int(len(bins) * 0.8)
+    train_bins = bins[:split_idx]
     test_bins = bins[split_idx:]
 
-    blackout_windows = build_blackout_windows(test_bins)
+    print("Generating Training Windows (Fixed 60s for batching)...")
+    train_windows = build_blackout_windows(train_bins, blackout_durations=[60], step_sec=15)
+    
+    print("Generating Test Windows (15s, 30s, 60s)...")
+    test_windows = build_blackout_windows(test_bins, blackout_durations=[15, 30, 60], step_sec=30)
+
+    # Fit StandardScaler on training data's blackout sections
+    from sklearn.preprocessing import StandardScaler
+    
+    all_acc = np.vstack([w['blackout']['acc_feat'] for w in train_windows])
+    all_gyro = np.vstack([w['blackout']['gyro_feat'] for w in train_windows])
+    all_mtn = np.vstack([w['blackout']['mtn_input'] for w in train_windows])
+    all_raw = np.vstack([w['blackout']['raw_accel'] for w in train_windows])
+    all_grav = np.vstack([w['blackout']['gravity'] for w in train_windows])
+    
+    scalers = {
+        'acc': StandardScaler().fit(all_acc),
+        'gyro': StandardScaler().fit(all_gyro),
+        'mtn': StandardScaler().fit(all_mtn),
+        'raw': StandardScaler().fit(all_raw),
+        'grav': StandardScaler().fit(all_grav)
+    }
 
     os.makedirs('data', exist_ok=True)
-    with open('data/blackout_windows.pkl', 'wb') as f:
-        pickle.dump(blackout_windows, f)
-    print(f"Saved {len(blackout_windows)} blackout windows to data/blackout_windows.pkl")
+    with open('data/train_blackout_windows.pkl', 'wb') as f:
+        pickle.dump(train_windows, f)
+    with open('data/test_blackout_windows.pkl', 'wb') as f:
+        pickle.dump(test_windows, f)
+    with open('data/scalers.pkl', 'wb') as f:
+        pickle.dump(scalers, f)
+        
+    print(f"Saved {len(train_windows)} Train windows and {len(test_windows)} Test windows + Scalers to data/")

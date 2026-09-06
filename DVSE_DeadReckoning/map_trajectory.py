@@ -89,7 +89,6 @@ def integrate_trajectory(
 # ============================================================
 
 def create_trajectory_map():
-
     print("=" * 60)
     print("DVSE Dead Reckoning Trajectory Visualization")
     print("=" * 60)
@@ -97,143 +96,61 @@ def create_trajectory_map():
     print(f"Device: {DEVICE}")
 
     if DEVICE.type == "cuda":
-        print(
-            f"GPU: {torch.cuda.get_device_name(0)}"
-        )
+        print(f"CUDA Device: {torch.cuda.get_device_name(0)}")
 
     # --------------------------------------------------------
     # Load dataset
     # --------------------------------------------------------
 
-    print("\nLoading Test Dataset and Scalers...")
+    test_pkl = 'data/test_blackout_windows.pkl'
+    scaler_pkl = 'data/scalers.pkl'
 
-    test_dataset = DeadReckoningDataset(
-        "data/test_windows.pkl",
-        "data/scalers.pkl"
-    )
-
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=1,
-        shuffle=False,
-        pin_memory=(DEVICE.type == "cuda")
-    )
-
-    print(
-        f"Test windows: {len(test_dataset)}"
-    )
-
-    # --------------------------------------------------------
-    # Load original windows ONCE
-    # --------------------------------------------------------
+    print(f"Loading Test Dataset from {test_pkl}...")
+    test_dataset = DeadReckoningDataset(test_pkl, scaler_pkl)
+    print(f"Test windows: {len(test_dataset)}")
 
     print("Loading test window metadata...")
-
-    with open(
-        "data/test_windows.pkl",
-        "rb"
-    ) as f:
+    import pickle
+    with open(test_pkl, 'rb') as f:
         windows = pickle.load(f)
 
     # --------------------------------------------------------
     # Load model
     # --------------------------------------------------------
 
-    print("\nLoading DVSE Dead Reckoning Model...")
-
+    print("Loading DVSE Dead Reckoning Model...")
     model = DVSE()
-
-    checkpoint_path = (
-        "checkpoints/dvse_dead_reckoning.pth"
-    )
-
-    state_dict = torch.load(
-        checkpoint_path,
-        map_location=DEVICE,
-        weights_only=True
-    )
-
+    checkpoint_path = 'checkpoints/dvse_dead_reckoning.pth'
+    state_dict = torch.load(checkpoint_path, map_location=DEVICE, weights_only=True)
     model.load_state_dict(state_dict)
-
     model = model.to(DEVICE)
     model.eval()
-
-    print(
-        f"Model loaded on {DEVICE}"
-    )
+    print(f"Model loaded on {DEVICE}")
 
     # --------------------------------------------------------
     # Select windows
     # --------------------------------------------------------
 
-    num_windows_to_plot = 5
-
-    # Original:
-    # step_sec = 15
-    # window_sec = 60
-    # Therefore every 4th window is contiguous.
-    indices_to_plot = [
-        i * 4
-        for i in range(num_windows_to_plot)
-        if i * 4 < len(test_dataset)
-    ]
-
-    if not indices_to_plot:
-        print(
-            "Not enough test windows to plot."
-        )
-        return
-
-    print(
-        f"\nGenerating map for "
-        f"{len(indices_to_plot)} test windows..."
-    )
-
-    # --------------------------------------------------------
-    # Create map
-    # --------------------------------------------------------
+    num_windows_to_plot = 50
+    # Assuming test step is 30s for a 60s window (step_sec=30). 
+    # To get non-overlapping windows of 60s, we jump by 60/30 = 2 indices.
+    indices_to_plot = [i * 2 for i in range(num_windows_to_plot) if i * 2 < len(test_dataset)]
 
     m = None
+    print(f"\nGenerating map for {len(indices_to_plot)} test windows...\n")
 
-    # --------------------------------------------------------
-    # Inference
-    # --------------------------------------------------------
-
-    with torch.inference_mode():
-
-        for plot_idx, dataset_idx in enumerate(
-            indices_to_plot
-        ):
-
-            print(
-                f"\nProcessing window "
-                f"{plot_idx + 1}/{len(indices_to_plot)} "
-                f"(dataset index {dataset_idx})"
-            )
-
-            # ------------------------------------------------
-            # Get sample
-            # ------------------------------------------------
-
+    with torch.no_grad():
+        for plot_idx, dataset_idx in enumerate(indices_to_plot):
+            print(f"Processing window {plot_idx + 1}/{len(indices_to_plot)} (dataset index {dataset_idx})")
             batch = test_dataset[dataset_idx]
 
             (
-                acc_t,
-                gyro_t,
-                mtn_t,
-                raw_t,
-                grav_t,
-                vr_train,
-                vr_seed,
-                delta_v_seq,
-                target_disp,
-                heading_target
+                acc_t, gyro_t, mtn_t, raw_t, grav_t,
+                vr_train, vr_seed, delta_v_seq, target_disp,
+                heading_target, raw_gyro_t, start_heading_t
             ) = batch
 
-            # ------------------------------------------------
             # Add batch dimension
-            # ------------------------------------------------
-
             acc_t = acc_t.unsqueeze(0)
             gyro_t = gyro_t.unsqueeze(0)
             mtn_t = mtn_t.unsqueeze(0)
@@ -245,6 +162,7 @@ def create_trajectory_map():
             delta_v_seq = delta_v_seq.unsqueeze(0)
             target_disp = target_disp.unsqueeze(0)
             heading_target = heading_target.unsqueeze(0)
+            raw_gyro_t = raw_gyro_t.unsqueeze(0)
 
             # ------------------------------------------------
             # Move everything to CUDA
@@ -260,9 +178,8 @@ def create_trajectory_map():
             vr_seed = to_device(vr_seed)
             delta_v_seq = to_device(delta_v_seq)
             target_disp = to_device(target_disp)
-            heading_target = to_device(
-                heading_target
-            )
+            heading_target = to_device(heading_target)
+            raw_gyro_t = to_device(raw_gyro_t)
 
             # ------------------------------------------------
             # Prediction
@@ -297,24 +214,28 @@ def create_trajectory_map():
                 .numpy()
             )
 
-            yaw_pred_rad = (
-                euler_pred[0, :, 2]
+            win_data = windows[dataset_idx]
+            # Relative yaw integration
+            start_heading = start_heading_t[0].item()
+
+            gyro_yaw_rate = (
+                raw_gyro_t[0, :, 2]
                 .detach()
                 .cpu()
                 .numpy()
             )
+
+            yaw_pred_rad = np.zeros(len(v_cum_pred))
+            yaw_pred_rad[0] = start_heading
+            for t in range(1, len(v_cum_pred)):
+                yaw_pred_rad[t] = yaw_pred_rad[t - 1] + gyro_yaw_rate[t - 1]
 
             # ------------------------------------------------
             # Ground truth
             # ------------------------------------------------
-
             v_cum_gt = (
-                vr_train[0, :, 0]
-                .detach()
-                .cpu()
-                .numpy()
+                vr_train.squeeze(0)[:, 0].numpy()
             )
-
             yaw_gt_rad = (
                 heading_target[0]
                 .detach()
@@ -329,11 +250,11 @@ def create_trajectory_map():
             win_data = windows[dataset_idx]
 
             start_lat = float(
-                win_data["start_lat"]
+                win_data["ground_truth"]["start_lat"]
             )
 
             start_lon = float(
-                win_data["start_lon"]
+                win_data["ground_truth"]["start_lon"]
             )
 
             print(

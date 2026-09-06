@@ -125,6 +125,7 @@ def bin_dataset(df_s, df_v):
             'gyro_feat': extract_features(gyro_data),
             'mtn_input': int_acc.tolist() + avg_grav.tolist(),
             'raw_accel': avg_acc.tolist(),
+            'raw_gyro': np.mean(gyro_data, axis=0).tolist(),
             'gravity': avg_grav.tolist(),
             'mobile_gps_speed': float(group[mobile_speed_col].mean()), 
             'v_odo_speed': float(group['v_odo_speed'].mean()),

@@ -140,44 +140,55 @@ for i, w in enumerate(windows):
         "mtn_input": (d, 6),
         "acc_feat": (d, 18),
         "gyro_feat": (d, 18),
-        "delta_v_seq": (d,),
-        "heading_target_rad": (d,),
-        "vr_train": (d, 1),
         "raw_gyro": (d, 3),
     }
 
     for key, expected_shape in expected.items():
-
         if key not in b:
-            shape_errors.append(
-                (i, key, "MISSING", expected_shape)
-            )
+            shape_errors.append((i, key, "MISSING", expected_shape))
             continue
-
         actual = np.asarray(b[key]).shape
-
         if actual != expected_shape:
-            shape_errors.append(
-                (i, key, actual, expected_shape)
-            )
+            shape_errors.append((i, key, actual, expected_shape))
 
+    # Also check ground truth keys
+    gt_expected = {
+        "speeds_ms": (d,),
+        "headings_rad": (d,),
+        "delta_v": (d,),
+    }
+    gt_block = w["ground_truth"]
+    for key, expected_shape in gt_expected.items():
+        if key not in gt_block:
+            shape_errors.append((i, f"gt_{key}", "MISSING", expected_shape))
+            continue
+        actual = np.asarray(gt_block[key]).shape
+        if actual != expected_shape:
+            shape_errors.append((i, f"gt_{key}", actual, expected_shape))
 
 if shape_errors:
-
-    print(
-        f"  ✗ {len(shape_errors)} shape errors"
-    )
-
+    print(f"  ✗ {len(shape_errors)} shape errors")
     for err in shape_errors[:20]:
         print("   ", err)
-
 else:
+    print("  ✓ All blackout arrays have expected shapes")
 
-    print(
-        "  ✓ All blackout arrays have expected shapes"
-    )
+print("\n--- Diagnostic Stats ---")
+rows = []
+for i, w in enumerate(windows):
+    gt = w["ground_truth"]
+    dist = float(gt["total_distance_m"])
+    disp = np.asarray(gt["cum_disp_m"], dtype=float)
+    speeds = np.asarray(gt["speeds_ms"], dtype=float)
+    delta_v = np.asarray(gt["delta_v"], dtype=float)
 
+    final_disp = float(np.linalg.norm(disp[-1]))
 
+    headings = np.asarray(gt["headings_rad"], dtype=float)
+    
+    # Wrap heading change to [-pi, pi)
+    heading_change_raw = headings[-1] - headings[0]
+    heading_change = (heading_change_raw + np.pi) % (2 * np.pi) - np.pi
 # ============================================================================
 # 5. NUMERICAL HEALTH
 # ============================================================================

@@ -26,9 +26,9 @@ def inference_step(model, acc_t, gyro_t, mtn_t, raw_t, grav_t, vr_seed):
         if t == 0:
             vr_seq = vr_seed.unsqueeze(-1) # (B, 1, 1)
         else:
-            dv_tensor = torch.cat(delta_v_preds, dim=1) # (B, t)
-            v_cum = vr_seed + torch.cumsum(dv_tensor, dim=1) # (B, t)
-            vr_seq = torch.cat([vr_seed.unsqueeze(-1), v_cum.unsqueeze(-1)], dim=1) # (B, t+1, 1)
+            # Prevent exploding errors by feeding a constant vr_seed instead of erroneous v_cum
+            vr_seq = vr_seed.unsqueeze(1).expand(-1, t+1, 1) # (B, t+1, 1)
+
             
         # Forward pass up to current step
         dv, eu = model(acc_sub, gyro_sub, vr_seq, mtn_sub, raw_sub, grav_sub)
