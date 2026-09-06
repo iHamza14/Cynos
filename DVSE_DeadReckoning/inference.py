@@ -24,11 +24,11 @@ def inference_step(model, acc_t, gyro_t, mtn_t, raw_t, grav_t, vr_seed):
         grav_sub = grav_t[:, :t+1, :]
         
         if t == 0:
-            vr_seq = vr_seed.unsqueeze(1).unsqueeze(2) # (B, 1, 1)
+            vr_seq = vr_seed.unsqueeze(-1) # (B, 1, 1)
         else:
             dv_tensor = torch.cat(delta_v_preds, dim=1) # (B, t)
-            v_cum = vr_seed.unsqueeze(1) + torch.cumsum(dv_tensor, dim=1) # (B, t)
-            vr_seq = torch.cat([vr_seed.unsqueeze(1).unsqueeze(2), v_cum.unsqueeze(-1)], dim=1) # (B, t+1, 1)
+            v_cum = vr_seed + torch.cumsum(dv_tensor, dim=1) # (B, t)
+            vr_seq = torch.cat([vr_seed.unsqueeze(-1), v_cum.unsqueeze(-1)], dim=1) # (B, t+1, 1)
             
         # Forward pass up to current step
         dv, eu = model(acc_sub, gyro_sub, vr_seq, mtn_sub, raw_sub, grav_sub)
@@ -42,10 +42,7 @@ def inference_step(model, acc_t, gyro_t, mtn_t, raw_t, grav_t, vr_seed):
     return delta_v_pred, euler_pred
 
 def test():
-    with open('checkpoints/scalers.pkl', 'rb') as f:
-        scalers = pickle.load(f)
-        
-    test_dataset = DeadReckoningDataset('data/test_windows.pkl', scaler=scalers, is_train=False)
+    test_dataset = DeadReckoningDataset('data/test_windows.pkl', 'data/scalers.pkl')
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
     
     model = DVSE()
@@ -64,7 +61,7 @@ def test():
             
             # Reconstruct displacement using predicted yaw
             heading_rad = euler_pred[..., 2]
-            v_cum = vr_seed.unsqueeze(1) + torch.cumsum(delta_v_pred.squeeze(-1), dim=1)
+            v_cum = vr_seed + torch.cumsum(delta_v_pred.squeeze(-1), dim=1)
             
             delta_north = (v_cum * torch.cos(heading_rad)).sum(dim=1)
             delta_east = (v_cum * torch.sin(heading_rad)).sum(dim=1)

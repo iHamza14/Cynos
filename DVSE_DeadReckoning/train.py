@@ -13,7 +13,7 @@ def loss_fn(delta_v_pred, euler_pred, delta_v_target, vr_seed, target_disp, head
     
     # 2. End-to-end displacement
     heading_rad = euler_pred[..., 2] # (B, T)
-    v_cum = vr_seed.unsqueeze(1) + torch.cumsum(delta_v_pred.squeeze(-1), dim=1) # (B, T)
+    v_cum = vr_seed + torch.cumsum(delta_v_pred.squeeze(-1), dim=1) # (B, T)
     
     delta_north = (v_cum * torch.cos(heading_rad)).sum(dim=1) # (B,)
     delta_east = (v_cum * torch.sin(heading_rad)).sum(dim=1) # (B,)
@@ -29,20 +29,17 @@ def loss_fn(delta_v_pred, euler_pred, delta_v_target, vr_seed, target_disp, head
 def train():
     os.makedirs('checkpoints', exist_ok=True)
     
-    train_dataset = DeadReckoningDataset('data/train_windows.pkl', is_train=True)
-    test_dataset = DeadReckoningDataset('data/test_windows.pkl', scaler=train_dataset.get_scalers(), is_train=False)
+    scaler_path = 'data/scalers.pkl'
+    train_dataset = DeadReckoningDataset('data/train_windows.pkl', scaler_path)
+    test_dataset = DeadReckoningDataset('data/test_windows.pkl', scaler_path)
     
-    # Save scalers
-    with open('checkpoints/scalers.pkl', 'wb') as f:
-        pickle.dump(train_dataset.get_scalers(), f)
-        
     train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False)
     
     model = DVSE()
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     
-    epochs = 30
+    epochs = 60
     for epoch in range(epochs):
         model.train()
         total_loss = 0.0
