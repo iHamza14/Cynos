@@ -1,154 +1,98 @@
-"""
-Blackout Window Generator
-Extends data_pipeline.py with evaluation windows for dead reckoning scoring.
-
-Window structure:
-  [---- context (10s) ----|---- blackout (N s) ----]
-  GPS visible              GPS masked (model uses IMU only)
-  
-Ground truth positions stored separately — never fed to model during eval.
-"""
-
 import numpy as np
 import pandas as pd
 import pickle
 import os
-from data_pipeline import bin_dataset, extract_features, haversine_delta
+from helper import bin_dataset, cumulative_displacement,total_distance_m
+from sklearn.preprocessing import StandardScaler
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 CONTEXT_SEC     = 10          # warm-up seconds before blackout (GPS visible)
-BLACKOUT_DURATIONS = [15 , 30, 60]   # seconds — covers both hackathon constraints
+BLACKOUT_DURATIONS = [15 , 30, 60]   # seconds
 BLACKOUT_STEP   = 30          # slide every 30s to get varied blackout scenarios
 MIN_SPEED_KMPH  = 5           # reject stationary blackout windows
 MAX_GPS_ACC     = 10          # quality gate on context window
 MIN_GPS_SATS    = 6
+HZ=10
 
-# ── Cumulative displacement along a trajectory ─────────────────────────────────
-def cumulative_displacement(bins):
-    """
-    Returns (N, 2) array of north/east displacement from bins[0] at each step.
-    Uses vehicle lat/lon as ground truth — never phone GPS.
-    """
-    disps = [[0.0, 0.0]]
-    for i in range(1, len(bins)):
-        d = haversine_delta(
-            bins[i-1]['v_lat'], bins[i-1]['v_lon'],
-            bins[i]['v_lat'],   bins[i]['v_lon']
-        )
-        # Accumulate from origin
-        disps.append([disps[-1][0] + d[0], disps[-1][1] + d[1]])
-    return np.array(disps)   # shape (N, 2)
-
-def total_distance_m(bins):
-    """Haversine arc length of the ground truth trajectory in metres."""
-    dist = 0.0
-    for i in range(1, len(bins)):
-        d = haversine_delta(
-            bins[i-1]['v_lat'], bins[i-1]['v_lon'],
-            bins[i]['v_lat'],   bins[i]['v_lon']
-        )
-        dist += np.linalg.norm(d)
-    return dist
-
-# ── Quality helpers ────────────────────────────────────────────────────────────
-def context_is_clean(context_bins):
-    """All context bins must have good GPS — model initialises from these."""
-    for b in context_bins:
-        if b['gps_acc'] > MAX_GPS_ACC or b['gps_sats'] < MIN_GPS_SATS:
-            return False
-    return True
-
-def blackout_is_moving(blackout_bins):
-    """Reject near-stationary blackout windows — drift % is meaningless at 0 km/h."""
-    avg_speed = np.mean([b['v_odo_speed'] * 3.6 for b in blackout_bins])
-    return avg_speed >= MIN_SPEED_KMPH
-
-def context_is_contiguous(bins):
-    for i in range(1, len(bins)):
-        if bins[i]['abs_sec'] - bins[i-1]['abs_sec'] != 1:
-            return False
-    return True
-
-# ── Main builder ───────────────────────────────────────────────────────────────
+# ── Main 10Hz Builder ──────────────────────────────────────────────────────────
 def build_blackout_windows(bins, blackout_durations=BLACKOUT_DURATIONS,
-                           context_sec=CONTEXT_SEC, step_sec=BLACKOUT_STEP):
-    """
-    Returns list of blackout window dicts.
-    
-    Each window:
-      context  — what the model sees to initialise state (GPS available)
-      blackout — what the model receives during dropout (IMU only)
-      gt_*     — ground truth labels (never fed to model, used for scoring only)
-    """
+                                context_sec=CONTEXT_SEC, step_sec=BLACKOUT_STEP):
     windows = []
-    total_sec = len(bins)
+    total_steps = len(bins)
+    
+    # Convert seconds to 10Hz step counts
+    context_steps = context_sec * HZ
+    step_size = step_sec * HZ
 
-    for blackout_dur in blackout_durations:
-        window_len = context_sec + blackout_dur
+    for blackout_dur_sec in blackout_durations:
+        blackout_steps = blackout_dur_sec * HZ
+        window_len_steps = context_steps + blackout_steps
 
-        for i in range(0, total_sec - window_len + 1, step_sec):
-            context_bins  = bins[i : i + context_sec]
-            blackout_bins = bins[i + context_sec : i + window_len]
+        for i in range(0, total_steps - window_len_steps + 1, step_size):
+            context_bins  = bins[i : i + context_steps]
+            blackout_bins = bins[i + context_steps : i + window_len_steps]
 
-            # ── Structural guards ──────────────────────────────────────────
-            if len(context_bins)  != context_sec:  continue
-            if len(blackout_bins) != blackout_dur: continue
-            if not context_is_contiguous(context_bins + blackout_bins): continue
-            if not context_is_clean(context_bins):  continue
-            if not blackout_is_moving(blackout_bins): continue
+            # ── 1. Structural Guards ──
+            if len(context_bins) != context_steps: continue
+            if len(blackout_bins) != blackout_steps: continue
+            
+            # Check 10Hz continuity (timestamps should jump by exactly 0.1s. Allow 0.15s max drift)
+            times = [b['abs_sec'] for b in context_bins + blackout_bins]
+            if np.max(np.diff(times)) > 0.15: continue
+            
+            # ── 2. Quality Guards ──
+            bad_gps = sum(1 for b in context_bins if b['gps_acc'] > MAX_GPS_ACC or b['gps_sats'] < MIN_GPS_SATS)
+            if bad_gps > 0: continue
+            
+            avg_speed = np.mean([b['v_odo_speed'] * 3.6 for b in blackout_bins])
+            if avg_speed < MIN_SPEED_KMPH: continue
 
-            # ── Context pack (model input at t=0 of blackout) ─────────────
+            # ── 3. Context Pack (Model input at t=0 of blackout) ──
             last_ctx = context_bins[-1]
             context = {
-                # Statistical features over the 10-second warm-up
-                'acc_feat':  np.stack([b['acc_feat']  for b in context_bins]),   # (10, 18)
-                'gyro_feat': np.stack([b['gyro_feat'] for b in context_bins]),   # (10, 18)
-                'mtn_input': np.stack([b['mtn_input'] for b in context_bins]),   # (10, 6)
-                'raw_accel': np.stack([b['raw_accel'] for b in context_bins]),   # (10, 3)
-                'gravity':   np.stack([b['gravity']   for b in context_bins]),   # (10, 3)
-
-                # Seed values — last known state before blackout
-                'vr_seed':         float(last_ctx['mobile_gps_speed']),          # teacher-force seed
+                'raw_accel': np.stack([b['raw_accel'] for b in context_bins]),   # Shape: (100, 3)
+                'raw_gyro':  np.stack([b['raw_gyro']  for b in context_bins]),   # Shape: (100, 3)
+                'gravity':   np.stack([b['gravity']   for b in context_bins]),   # Shape: (100, 3)
+                'vr_seed':   float(last_ctx['mobile_gps_speed']),
             }
 
-            # ── Blackout pack (model input during dropout — no GPS) ────────
+            # ── 4. Blackout Pack (Model input during dropout) ──
             blackout = {
-                'acc_feat':  np.stack([b['acc_feat']  for b in blackout_bins]),  # (N, 18)
-                'gyro_feat': np.stack([b['gyro_feat'] for b in blackout_bins]),  # (N, 18)
-                'mtn_input': np.stack([b['mtn_input'] for b in blackout_bins]),  # (N, 6)
-                'raw_accel': np.stack([b['raw_accel'] for b in blackout_bins]),  # (N, 3)
-                'raw_gyro':  np.stack([b.get('raw_gyro', [0,0,0]) for b in blackout_bins]),  # (N, 3)
-                'gravity':   np.stack([b['gravity']   for b in blackout_bins]),  # (N, 3)
+                'raw_accel': np.stack([b['raw_accel'] for b in blackout_bins]),  # Shape: (N, 3)
+                'raw_gyro':  np.stack([b['raw_gyro']  for b in blackout_bins]),  # Shape: (N, 3)
+                'gravity':   np.stack([b['gravity']   for b in blackout_bins]),  # Shape: (N, 3)
             }
 
-            # ── Ground truth (scoring only — never seen by model) ──────────
-            gt_cum_disp   = cumulative_displacement(blackout_bins)               # (N, 2) metres N/E
-            gt_speeds     = np.array([b['v_odo_speed'] for b in blackout_bins]) # (N,) m/s
-            gt_headings   = np.array([np.radians(b['v_heading']) for b in blackout_bins])  # (N,) rad
+            # ── 5. Ground Truth (For scoring) ──
+            gt_cum_disp   = cumulative_displacement(blackout_bins)               # Shape: (N, 2)
+            gt_speeds     = np.array([b['v_odo_speed'] for b in blackout_bins])  # Shape: (N,)
+            gt_headings   = np.array([np.radians(b['v_heading']) for b in blackout_bins])  # Shape: (N,)
             
-            # The speed change must be per-second, not the mean of 100Hz micro-changes!
-            gt_delta_v    = np.zeros(blackout_dur)
+            # 10Hz per-step acceleration/deceleration
+            gt_delta_v    = np.zeros(blackout_steps)
             gt_delta_v[0] = gt_speeds[0] - context['vr_seed']
-            if blackout_dur > 1:
+            if blackout_steps > 1:
                 gt_delta_v[1:] = np.diff(gt_speeds)
             
-            total_dist    = total_distance_m(blackout_bins)                      # scalar metres
-
-            # Per-timestep drift constraint reference
-            # Hackathon: <5m over 50m  OR  <100m over 1km
-            # Store for scorer to compute: drift[t] / cumulative_dist[t]
-            cumulative_dist_per_step = np.array([
-                total_distance_m(blackout_bins[:t+1]) for t in range(blackout_dur)
-            ])
+            # Vectorized fast cumulative distance calculation
+            cum_dist_array = np.zeros(blackout_steps)
+            if blackout_steps > 1:
+                lats = np.radians([b['v_lat'] for b in blackout_bins])
+                lons = np.radians([b['v_lon'] for b in blackout_bins])
+                R = 6371000.0
+                d_lats = np.diff(lats)
+                d_lons = np.diff(lons)
+                mid_lats = (lats[:-1] + lats[1:]) / 2.0
+                step_dists = np.sqrt((d_lats * R)**2 + (d_lons * R * np.cos(mid_lats))**2)
+                cum_dist_array[1:] = np.cumsum(step_dists)
 
             ground_truth = {
-                'cum_disp_m':          gt_cum_disp,           # (N, 2) — compare DR pos here
-                'speeds_ms':           gt_speeds,             # (N,)
-                'headings_rad':        gt_headings,           # (N,)
-                'delta_v':             gt_delta_v,            # (N,)
-                'total_distance_m':    total_dist,            # scalar
-                'cumulative_dist_m':   cumulative_dist_per_step,  # (N,) for % drift calc
-                # Endpoints for plotting
+                'cum_disp_m':          gt_cum_disp,           
+                'speeds_ms':           gt_speeds,             
+                'headings_rad':        gt_headings,           
+                'delta_v':             gt_delta_v,            
+                'total_distance_m':    total_distance_m(blackout_bins),            
+                'cumulative_dist_m':   cum_dist_array,  
                 'start_lat': float(blackout_bins[0]['v_lat']),
                 'start_lon': float(blackout_bins[0]['v_lon']),
                 'end_lat':   float(blackout_bins[-1]['v_lat']),
@@ -159,47 +103,16 @@ def build_blackout_windows(bins, blackout_durations=BLACKOUT_DURATIONS,
                 'context':          context,
                 'blackout':         blackout,
                 'ground_truth':     ground_truth,
-                'blackout_dur_sec': blackout_dur,
+                'blackout_dur_sec': blackout_dur_sec,
                 'context_dur_sec':  context_sec,
-                'window_start_sec': bins[i]['abs_sec'],
+                'window_start_sec': context_bins[0]['abs_sec'],
             })
 
-    print(f"  Generated {len(windows)} blackout windows across durations {blackout_durations}s")
-    # Breakdown by duration
+    print(f"  Generated {len(windows)} 10Hz blackout windows across durations {blackout_durations}s")
     for d in blackout_durations:
         n = sum(1 for w in windows if w['blackout_dur_sec'] == d)
         print(f"    {d:3d}s blackout: {n} windows")
     return windows
-
-# ── Scoring helper (use this at eval time, not during training) ────────────────
-def score_blackout_window(window, dr_positions_ne):
-    """
-    dr_positions_ne : (N, 2) numpy array of model's north/east position estimates
-                      relative to blackout start, one per second.
-    
-    Returns dict of drift metrics matching hackathon constraint language.
-    """
-    gt   = window['ground_truth']['cum_disp_m']          # (N, 2)
-    dist = window['ground_truth']['cumulative_dist_m']   # (N,)
-    total_dist = window['ground_truth']['total_distance_m']
-
-    # Euclidean error at each timestep (metres)
-    errors = np.linalg.norm(dr_positions_ne - gt, axis=1)  # (N,)
-
-    # Drift as % of distance travelled at that moment
-    pct_drift = np.divide(errors, dist, out=np.zeros_like(errors), where=dist!=0) * 100
-
-    return {
-        'mean_error_m':       float(errors.mean()),
-        'max_error_m':        float(errors.max()),         # worst case — use for constraint check
-        'endpoint_error_m':   float(errors[-1]),
-        'mean_pct_drift':     float(pct_drift.mean()),
-        'max_pct_drift':      float(pct_drift.max()),
-        'total_distance_m':   float(total_dist),
-        'constraint_pass_5m_50m':   bool(errors.max() < 5   and total_dist >= 40),
-        'constraint_pass_100m_1km': bool(errors.max() < 100 and total_dist >= 800),
-        'per_step_errors_m':  errors.tolist(),             # for position plot
-    }
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
@@ -225,22 +138,15 @@ if __name__ == '__main__':
     
     print("Generating Test Windows (15s, 30s, 60s)...")
     test_windows = build_blackout_windows(test_bins, blackout_durations=[15, 30, 60], step_sec=30)
+    
+    all_raw_accel = np.vstack([w['blackout']['raw_accel'] for w in train_windows])
+    all_raw_gyro = np.vstack([w['blackout']['raw_gyro'] for w in train_windows])
+    all_gravity = np.vstack([w['blackout']['gravity'] for w in train_windows])
 
-    # Fit StandardScaler on training data's blackout sections
-    from sklearn.preprocessing import StandardScaler
-    
-    all_acc = np.vstack([w['blackout']['acc_feat'] for w in train_windows])
-    all_gyro = np.vstack([w['blackout']['gyro_feat'] for w in train_windows])
-    all_mtn = np.vstack([w['blackout']['mtn_input'] for w in train_windows])
-    all_raw = np.vstack([w['blackout']['raw_accel'] for w in train_windows])
-    all_grav = np.vstack([w['blackout']['gravity'] for w in train_windows])
-    
     scalers = {
-        'acc': StandardScaler().fit(all_acc),
-        'gyro': StandardScaler().fit(all_gyro),
-        'mtn': StandardScaler().fit(all_mtn),
-        'raw': StandardScaler().fit(all_raw),
-        'grav': StandardScaler().fit(all_grav)
+        'raw_accel': StandardScaler().fit(all_raw_accel),
+        'raw_gyro': StandardScaler().fit(all_raw_gyro),
+        'gravity': StandardScaler().fit(all_gravity)
     }
 
     os.makedirs('data', exist_ok=True)
@@ -250,5 +156,5 @@ if __name__ == '__main__':
         pickle.dump(test_windows, f)
     with open('data/scalers.pkl', 'wb') as f:
         pickle.dump(scalers, f)
-        
+
     print(f"Saved {len(train_windows)} Train windows and {len(test_windows)} Test windows + Scalers to data/")
