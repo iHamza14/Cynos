@@ -45,8 +45,9 @@ class BlackoutDataset(Dataset):
             'blackout_raw_accel': torch.tensor(blackout['raw_accel'], dtype=torch.float32),
             'blackout_raw_gyro': torch.tensor(blackout['raw_gyro'], dtype=torch.float32),
             
-            # Seed scalar / vector
+            # Seed scalar / vector and initial heading
             'vr_seed': torch.tensor(context['vr_seed'], dtype=torch.float32),
+            'initial_yaw': torch.tensor(ground_truth['headings_rad'][0], dtype=torch.float32),
             
             # Ground truth targets for EKF outputs
             'speeds_ms': torch.tensor(ground_truth['speeds_ms'], dtype=torch.float32),
@@ -89,7 +90,7 @@ class TemporalBlock(nn.Module):
         return self.relu(out + res)
 
 class TCN(nn.Module):
-    def __init__(self, input_size=6, num_channels=[32, 64, 128], kernel_size=3, dropout=0.2):
+    def __init__(self, input_size=7, num_channels=[32, 64, 128], kernel_size=3, dropout=0.2):
         super().__init__()
         layers = []
         num_levels = len(num_channels)
@@ -107,8 +108,17 @@ class TCN(nn.Module):
         self.vel_out = nn.Conv1d(num_channels[-1], 3, 1) # 3D Velocity Pseudo-Measurement
         self.r_scale_out = nn.Conv1d(num_channels[-1], 3, 1) # 3x Scaling factors for Measurement Noise
 
-    def forward(self, x):
-        # x is expected to be (Batch, Channels, SeqLen)
+    def forward(self, x, vr_seed):
+        # x is expected to be (Batch, 6, SeqLen)
+        # vr_seed is expected to be (Batch) or (Batch, 1)
+        B, C, L = x.size()
+        
+        # Broadcast vr_seed to (Batch, 1, SeqLen)
+        seed_tensor = vr_seed.view(B, 1, 1).expand(B, 1, L)
+        
+        # Concatenate so TCN input is 7 channels
+        x = torch.cat([x, seed_tensor], dim=1)
+        
         features = self.network(x)
         pseudo_vel = self.vel_out(features)
         
@@ -171,9 +181,12 @@ class DifferentiableEKF(nn.Module):
         g_corr = gyro - b_g
         
         # Update orientation
+        # Compass heading increases clockwise (Right turn = positive delta heading)
+        # Standard right-hand rule IMU (Z up) has positive Gyro Z for counter-clockwise (Left turns)
+        # Therefore, we must SUBTRACT Gyro Z to correctly track compass heading!
         new_roll = roll + g_corr[:, 0] * self.dt
         new_pitch = pitch + g_corr[:, 1] * self.dt
-        new_yaw = yaw + g_corr[:, 2] * self.dt
+        new_yaw = yaw - g_corr[:, 2] * self.dt
         
         # Transform acceleration to global frame
         R_mat = rot_matrix_from_euler(roll, pitch, yaw)
@@ -228,7 +241,7 @@ class DifferentiableEKF(nn.Module):
         
         return new_x, new_P
 
-    def forward(self, vr_seed, ctx_accel, ctx_gyro, blk_accel, blk_gyro, tcn_pseudo_vel, tcn_r_scale):
+    def forward(self, vr_seed, initial_yaw, ctx_accel, ctx_gyro, blk_accel, blk_gyro, tcn_pseudo_vel, tcn_r_scale):
         B = vr_seed.size(0)
         
         x = self.static_x.unsqueeze(0).repeat(B, 1)
@@ -243,6 +256,20 @@ class DifferentiableEKF(nn.Module):
         for t in range(ctx_len):
             x, P = self.predict_step(x, P, ctx_accel[:, t, :], ctx_gyro[:, t, :])
             
+        # Reset position to origin so cumulative displacement starts at (0,0) for the blackout
+        x = x.clone()
+        x[:, 0:3] = 0.0
+        
+        # Explicitly force the yaw to match the ground truth heading at the start of blackout
+        x[:, 8] = initial_yaw.squeeze()
+        
+        # Reset the global velocity vector using the seed speed and the true heading
+        speed = vr_seed.squeeze()
+        yaw_val = initial_yaw.squeeze()
+        x[:, 3] = speed * torch.cos(yaw_val) # North Velocity
+        x[:, 4] = speed * torch.sin(yaw_val) # East Velocity
+        x[:, 5] = 0.0                        # Down Velocity
+        
         # Phase 2: Blackout Rollout (Predict + Update via TCN)
         blk_len = blk_accel.size(1)
         pred_traj = []
@@ -258,10 +285,18 @@ class DifferentiableEKF(nn.Module):
             x, P = self.predict_step(x, P, blk_accel[:, t, :], blk_gyro[:, t, :])
             
             # EKF Update using Neural Measurement
-            z = tcn_pseudo_vel[:, t, :]
+            # TCN predicts velocity in the BODY frame. We must rotate it to the GLOBAL frame 
+            # so it matches the EKF's global velocity states (x[:, 3:6])
+            z_body = tcn_pseudo_vel[:, t, :] # (B, 3)
             r = tcn_r_scale[:, t, :]
             
-            x, P = self.update_step(x, P, z, r)
+            roll, pitch, yaw = x[:, 6], x[:, 7], x[:, 8]
+            R_mat = rot_matrix_from_euler(roll, pitch, yaw) # (B, 3, 3)
+            
+            # Rotate body measurement to global frame: z_global = R * z_body
+            z_global = torch.bmm(R_mat, z_body.unsqueeze(2)).squeeze(2)
+            
+            x, P = self.update_step(x, P, z_global, r)
             
             # Track states (2D Cumulative Displacement (X,Y) and Norm Speed)
             pred_traj.append(x[:, 0:2].unsqueeze(1)) 
@@ -315,6 +350,7 @@ def train_ekf_tcn():
             
             # Unpack and push to device
             vr_seed = batch['vr_seed'].to(device)
+            initial_yaw = batch['initial_yaw'].to(device)
             ctx_accel = batch['context_raw_accel'].to(device)
             ctx_gyro = batch['context_raw_gyro'].to(device)
             blk_accel = batch['blackout_raw_accel'].to(device)
@@ -328,11 +364,11 @@ def train_ekf_tcn():
             gt_speeds = batch['speeds_ms'].to(device)
             
             # 1. TCN yields Pseudo Velocity and Dynamic R scales over blackout
-            pseudo_vel, r_scale = tcn(blk_norm)
+            pseudo_vel, r_scale = tcn(blk_norm, vr_seed)
             
             # 2. Differentiable Rollout
             pred_disp, pred_speeds = ekf(
-                vr_seed, ctx_accel, ctx_gyro, 
+                vr_seed, initial_yaw, ctx_accel, ctx_gyro, 
                 blk_accel, blk_gyro, 
                 pseudo_vel, r_scale
             )
@@ -352,6 +388,10 @@ def train_ekf_tcn():
             total_loss += loss.item()
             
         print(f"Epoch [{epoch+1}/{epochs}], Loss: {total_loss / len(dataloader):.4f}")
+        
+    # Save the trained model weights so inference script can use them
+    torch.save(tcn.state_dict(), 'tcn_weights.pth')
+    print("Training complete. Weights saved to 'tcn_weights.pth'.")
 
 if __name__ == '__main__':
     train_ekf_tcn()
