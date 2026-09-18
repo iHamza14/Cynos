@@ -1,26 +1,53 @@
-# Virtual Environments
-venv/
-env/
-.env
-.venv/
+# Generated datasets and preprocessing artifacts
+/data/blackout_manifest.pkl
+/data/scalers.pkl
+/data/train_blackout_windows.pkl
+/data/test_blackout_windows.pkl
 
-# Python Cache
-__pycache__/
-*.py[cod]
-*$py.class
+# Diagnostic outputs
+/data/heading_diagnostic/
+/data/heading_diagnostics/
+/data/heading_diagnostics_fixed/
+/data/lag_diagnostic/
+/data/tcn_diagnostics/
+/data/blackout_ekf/
 
-# IDE and OS Files
-.DS_Store
-.idea/
-.vscode/
-
-# Jupyter Notebooks
-.ipynb_checkpoints
-
-# Project Specific (Large Datasets & Logs)
+# Trained model weights
+*.pt
 *.pth
-*.png
-*.html
-# evaluation_log.txt
-DVSE_Implementation/data/
-*.zip
+/data/tcn_delta_v.pt
+/data/tcn_delta_v_best.pt
+
+# Generated evaluation outputs
+/gyro_tcn_output/
+/data_preprocessing/output/
+
+# Generated plots
+/plots/
+/plots2/
+/heading_diagnostics/
+
+# Large source dataset
+/Synchronised V abd S datasets/
+
+# Local environment and experiment artifacts
+*.log
+*.tmp
+.DS_Store
+
+# Generated diagnostic plots and model outputs
+data/tcn_test_episode_*.png
+data/*.pkl
+data/*.pt
+gyro_tcn_output/
+plots/
+plots2/
+heading_diagnostics/
+data/heading_diagnostic/
+data/heading_diagnostics/
+data/heading_diagnostics_fixed/
+data/lag_diagnostic/
+data/tcn_diagnostics/
+
+# Large raw dataset
+Synchronised V abd S datasets/
