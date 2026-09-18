@@ -138,40 +138,7 @@ class WindowDataset(Dataset):
     def __getitem__(self, i):
         return self.x[i], self.y[i]
 
-
-class CausalBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, kernel=3, dilation=1, dropout=0.1):
-        super().__init__()
-        self.pad = (kernel - 1) * dilation
-        self.conv1 = nn.Conv1d(in_ch, out_ch, kernel, dilation=dilation)
-        self.conv2 = nn.Conv1d(out_ch, out_ch, kernel, dilation=dilation)
-        self.skip = nn.Conv1d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        residual = self.skip(x)
-        z = nn.functional.pad(x, (self.pad, 0))
-        z = self.dropout(torch.relu(self.conv1(z)))
-        z = nn.functional.pad(z, (self.pad, 0))
-        z = self.dropout(torch.relu(self.conv2(z)))
-        return torch.relu(z + residual)
-
-
-class GyroTCN(nn.Module):
-    def __init__(self, in_features=3, channels=48, dropout=0.1):
-        super().__init__()
-        self.blocks = nn.Sequential(
-            CausalBlock(in_features, channels, dilation=1, dropout=dropout),
-            CausalBlock(channels, channels, dilation=2, dropout=dropout),
-            CausalBlock(channels, channels, dilation=4, dropout=dropout),
-            CausalBlock(channels, channels, dilation=8, dropout=dropout),
-        )
-        self.head = nn.Conv1d(channels, 1, kernel_size=1)
-
-    def forward(self, x):
-        # [batch, time, features] -> [batch, features, time]
-        z = self.blocks(x.transpose(1, 2))
-        return self.head(z).squeeze(1)
+from models import GyroTCN
 
 
 def integrated_heading_loss(pred, target, heading_weight):
