@@ -1,0 +1,8 @@
+comparison,x_signal,y_signal,best_lag_samples,best_lag_seconds,best_signed_correlation,zero_lag_correlation,peak_abs_corr_minus_zero_abs_corr,valid_pairs_at_best
+mobile GPS speed vs vehicle speed,gps_speed_ms,vehicle_speed_ms,45,4.5,0.9859186118691862,0.9645830094052187,0.021335602463967485,126479
+acc_x vs vehicle longitudinal acceleration proxy,acc_x,vehicle_accel_ms2,-1,-0.1,0.01207488350295866,0.008252541908026299,0.003822341594932362,126523
+acc_y vs vehicle longitudinal acceleration proxy,acc_y,vehicle_accel_ms2,-4,-0.4,-0.05068213310395961,-0.037062381728823965,0.013619751375135644,126520
+acc_z vs vehicle longitudinal acceleration proxy,acc_z,vehicle_accel_ms2,-5,-0.5,0.03387131865240984,0.014876838827210094,0.018994479825199743,126519
+gyro_yaw vs vehicle acceleration proxy,gyro_yaw,vehicle_accel_ms2,-5,-0.5,0.017899237813139915,-0.0014065783887645795,0.016492659424375337,126519
+gyro_pitch vs vehicle acceleration proxy,gyro_pitch,vehicle_accel_ms2,1,0.1,-0.014492248464700309,-0.00939887503527424,0.005093373429426069,126523
+gyro_roll vs vehicle acceleration proxy,gyro_roll,vehicle_accel_ms2,1,0.1,0.007505553206740368,-0.0008087208688723944,0.006696832337867973,126523
