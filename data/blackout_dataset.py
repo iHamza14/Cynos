@@ -333,7 +333,7 @@ def build_windows(bins, stride_sec):
         vr_seed = float(ctx[-1]["mobile_gps_speed"])  # user specifies m/s
         gt_speeds = np.array([b["v_speed_ms"] for b in blk], dtype=float)
         gt_delta_v = np.empty(blackout_n, dtype=float)
-        gt_delta_v[0] = gt_speeds[0] - vr_seed
+        gt_delta_v[0] = gt_speeds[0] - float(ctx[-1]["v_speed_ms"])
         gt_delta_v[1:] = np.diff(gt_speeds)
 
         gps_eval = {

@@ -5,7 +5,9 @@ scalers.pkl and tcn_delta_v_best.pt (or pass --model).
 """
 import argparse
 import pickle
+from datetime import datetime
 from pathlib import Path
+import scipy.signal
 import numpy as np
 import torch
 from torch import nn
@@ -19,8 +21,9 @@ class Episodes(Dataset):
     def __len__(self): return len(self.windows)
     def __getitem__(self, i):
         w = self.windows[i]
-        x = np.concatenate([self.scalers[k].transform(w['blackout'][k])
+        x = np.concatenate([self.scalers[k].transform(np.concatenate([w['context'][k], w['blackout'][k]], axis=0))
                             for k in ('raw_accel', 'raw_gyro', 'gravity')], axis=1).astype(np.float32)
+
         dv = np.asarray(w['ground_truth']['delta_v_ms'], dtype=np.float32)
         seed = np.float32(w['context']['vr_seed_ms'])
         return torch.from_numpy(x.T), torch.from_numpy(dv), torch.tensor(seed), i
@@ -35,8 +38,12 @@ class Block(nn.Module):
     def forward(self,x): return x+self.net(x)
 class TCN(nn.Module):
     def __init__(self):
-        super().__init__(); self.in_proj=nn.Conv1d(9,64,1); self.blocks=nn.Sequential(*(Block(64,d) for d in (1,2,4,8,16,32,64))); self.out=nn.Conv1d(64,1,1)
-    def forward(self,x): return self.out(self.blocks(self.in_proj(x))).squeeze(1)
+        super().__init__()
+        self.input = nn.Conv1d(9, 64, 1)
+        self.blocks = nn.Sequential(*(Block(64, d) for d in (1, 2, 4, 8, 16)))
+        self.head = nn.Conv1d(64, 1, 1)
+    def forward(self, x):
+        return self.head(self.blocks(self.input(x))).squeeze(1)
 
 def load(path):
     with open(path,'rb') as f: return pickle.load(f)
@@ -57,7 +64,7 @@ def main():
     all_pd=[]; all_td=[]; all_seed=[]; all_idx=[]; all_x=[]
     with torch.no_grad():
         for x,dv,seed,idx in loader:
-            pred=model(x.to(device)).cpu().numpy()
+            pred=model(x.to(device))[:, -600:].cpu().numpy()
             all_pd.extend(pred); all_td.extend(dv.numpy()); all_seed.extend(seed.numpy()); all_idx.extend(idx.numpy()); all_x.extend(x.numpy())
     # Preserve original dataset order.
     order=np.argsort(all_idx); pdv=np.asarray(all_pd)[order]; tdv=np.asarray(all_td)[order]; seeds=np.asarray(all_seed)[order]
@@ -88,8 +95,10 @@ def main():
     for sec in CHECKPOINTS:
         j=sec*10-1; e=np.cumsum(pdv,axis=1)[:,j]-np.cumsum(tdv,axis=1)[:,j]
         print(f'  {sec:>2}s: signed bias={np.mean(e):+.4f} m/s, MAE={mae(e,np.zeros_like(e)):.4f} m/s')
-    out=root/'tcn_diagnostics'; out.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    out = root / 'tcn_diagnostics' / timestamp
     if args.plots:
+        out.mkdir(parents=True, exist_ok=True)
         # Randomly chosen reproducible episodes, not cherry-picked by error.
         rng=np.random.default_rng(42); picks=np.sort(rng.choice(len(seeds),size=min(5,len(seeds)),replace=False))
         t=np.arange(1,pdv.shape[1]+1)/10

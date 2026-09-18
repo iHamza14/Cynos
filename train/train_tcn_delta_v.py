@@ -2,16 +2,17 @@
 import pickle
 from pathlib import Path
 
+import scipy.signal
 import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 
 DATA = Path("data")
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE = "cuda" if torch.cuda.is_available() else "mps"
 BATCH_SIZE = 32
 EPOCHS = 60
-LR = 5e-3
+LR = 1e-3
 IN_CHANNELS = 9
 CHECKPOINTS = [2, 5, 10, 15, 30, 60]
 
@@ -33,9 +34,10 @@ class Episodes(Dataset):
         w = self.windows[idx]
         fields = []
         for key in ("raw_accel", "raw_gyro", "gravity"):
-            x = w["blackout"][key]
+            x = np.concatenate([w["context"][key], w["blackout"][key]], axis=0)
             fields.append(self.scalers[key].transform(x))
-        x = np.concatenate(fields, axis=1).astype(np.float32)  # (600, 9)
+        x = np.concatenate(fields, axis=1).astype(np.float32)  # (700, 9)
+
         dv = w["ground_truth"]["delta_v_ms"].astype(np.float32)
         seed = np.float32(w["context"]["vr_seed_ms"])
         return torch.from_numpy(x.T), torch.from_numpy(dv), torch.tensor(seed)
@@ -70,7 +72,7 @@ class TCN(nn.Module):
         super().__init__()
         self.input = nn.Conv1d(IN_CHANNELS, 64, 1)
         self.blocks = nn.Sequential(*[
-            TCNBlock(64, d) for d in (1, 2, 4, 8, 16, 32, 64)
+            TCNBlock(64, d) for d in (1, 2, 4, 8, 16)
         ])
         self.head = nn.Conv1d(64, 1, 1)
 
@@ -86,7 +88,7 @@ def evaluate(model, loader):
     with torch.no_grad():
         for x, dv, seed in loader:
             x, dv, seed = x.to(DEVICE), dv.to(DEVICE), seed.to(DEVICE)
-            pred_dv = model(x)
+            pred_dv = model(x)[:, -600:].contiguous()
             pred_v = seed[:, None] + torch.cumsum(pred_dv, dim=1)
             true_v = seed[:, None] + torch.cumsum(dv, dim=1)
             total_dv += loss_fn(pred_dv, dv).item() * len(x)
@@ -122,10 +124,14 @@ def main():
         for x, dv, seed in train_loader:
             x, dv, seed = x.to(DEVICE), dv.to(DEVICE), seed.to(DEVICE)
             optimizer.zero_grad()
-            pred_dv = model(x)
+            pred_dv = model(x)[:, -600:].contiguous()
             pred_v = seed[:, None] + torch.cumsum(pred_dv, dim=1)
             true_v = seed[:, None] + torch.cumsum(dv, dim=1)
-            loss = loss_fn(pred_dv, dv) + loss_fn(pred_v, true_v)
+            # Aggressive penalty on cumulative velocity and final drift
+            loss_dv = loss_fn(pred_dv, dv)
+            loss_v = loss_fn(pred_v, true_v)
+            loss_v_final = loss_fn(pred_v[:, -1], true_v[:, -1])
+            loss = loss_dv + loss_v * 20.0 + loss_v_final * 50.0
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
