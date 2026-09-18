@@ -3,13 +3,16 @@
 train:
   epochs: 60
   batch_size: 32
-  optimizer: Adam
-  lr: 1.0e-3
+  optimizer: AdamW
+  lr: 3.0e-4                # was 1.0e-3
   weight_decay: 1.0e-4
-  grad_clip: 1.0
+  grad_clip: 0.5            # was 1.0 — tighten
+  warmup_epochs: 5          # new
   early_stop_patience: 8
   seed: 42
   smooth_l1_beta: 1.0
+  loss_traj_scale: 0.05     # new
+  loss_speed_scale: 1.0     # new
 data:
   sample_rate_hz: 10
   imu_gnss_lag_sec: 0.5
