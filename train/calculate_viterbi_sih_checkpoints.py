@@ -3,11 +3,11 @@ import pickle
 import numpy as np
 
 # Load test windows to get ground truth speed
-with open("../data/test_blackout_windows.pkl", "rb") as f:
+with open("./data/test_blackout_windows.pkl", "rb") as f:
     test_items = pickle.load(f)
 
 # Load drift data (with Viterbi snapper results)
-drift_df = pd.read_csv("map_output_driver_e/detailed_drift_1hz_with_snapper.csv")
+drift_df = pd.read_csv("./train/map_output_driver_e/detailed_drift_1hz_with_snapper.csv")
 
 checkpoints = [15, 30, 60]
 results = []

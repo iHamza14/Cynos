@@ -12,7 +12,7 @@ Assumptions explicitly supplied by the project owner:
   `evaluation_only` so they cannot accidentally be fed to the model.
 - Save synchronized vehicle yaw rate as `ground_truth["yaw_rate_dps"]`, using
   the project's negative-vehicle-rate convention for phone yaw-rate prediction.
-- Keep chronological 80/20 split and train-only scaler fitting.
+- Random 80/10/10 split after selecting globally non-overlapping windows; fit scalers on train only.
 - Apply only the requested speed filter: reject windows whose mean vehicle speed
   over the 60 s blackout is <= 5 km/h. No GPS-quality filter.
 
@@ -34,10 +34,13 @@ HZ = 10
 CONTEXT_SEC = 10
 BLACKOUT_SEC = 60
 CHECKPOINTS_SEC = [2, 5, 10, 15, 30, 60]
-TRAIN_STRIDE_SEC = 15
-TEST_STRIDE_SEC = 30
+WINDOW_STRIDE_SEC = 1
 TRAIN_FRACTION = 0.80
-MIN_MEAN_BLACKOUT_SPEED_KMH = 5.0
+VAL_FRACTION = 0.10
+TEST_FRACTION = 0.10
+MIN_MEAN_BLACKOUT_SPEED_KMH = 5.0  # retained as historical config; no longer rejects low-speed windows
+HALTING_SPEED_THRESHOLD_KMH = 5.0
+HALTING_SPEED_THRESHOLD_MS = 2.0
 
 # Nominal road-label thresholds; labels are descriptive, not authoritative.
 STRAIGHT_MAX_HEADING_RATE_DPS = 5.0
@@ -47,14 +50,16 @@ ROUNDABOUT_MIN_ABS_HEADING_CHANGE_DEG = 180.0
 ROUNDABOUT_MIN_DURATION_SEC = 8.0
 STEERING_ACTIVE_DEG = 8.0
 
-S_PATH = (
-    "Synchronised V abd S datasets/"
-    "Categorised IOVNB Dataset/Vw (Driver E)/Vw04/S-Vw4.csv"
-)
-V_PATH = (
-    "Synchronised V abd S datasets/"
-    "Categorised IOVNB Dataset/Vw (Driver E)/Vw04/V-Vw4.csv"
-)
+SESSIONS = {
+    "driver_a_s4": {
+        "s_path": "/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/S (Driver A)/S4/S-S4.csv",
+        "v_path": "/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/S (Driver A)/S4/V-S4.csv",
+    },
+    "driver_e_vw04": {
+        "s_path": "/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/S-Vw4.csv",
+        "v_path": "/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/V-Vw4.csv",
+    },
+}
 OUT_DIR = "data"
 
 
@@ -291,7 +296,7 @@ def displacement_from_latlon(bins):
     return np.vstack(([0.0, 0.0], np.cumsum(np.column_stack((north, east)), axis=0)))
 
 
-def build_windows(bins, stride_sec):
+def build_windows(bins, stride_sec=WINDOW_STRIDE_SEC):
     context_n = CONTEXT_SEC * HZ
     blackout_n = BLACKOUT_SEC * HZ
     stride_n = stride_sec * HZ
@@ -311,9 +316,26 @@ def build_windows(bins, stride_sec):
             rejected["time_gap_or_invalid_time"] += 1
             continue
 
-        mean_speed_kmh = float(np.nanmean([b["v_speed_kmh"] for b in blk]))
-        if not np.isfinite(mean_speed_kmh) or mean_speed_kmh <= MIN_MEAN_BLACKOUT_SPEED_KMH:
-            rejected["mean_blackout_speed_le_5_kmh"] += 1
+        blackout_speeds_kmh = np.array([b["v_speed_kmh"] for b in blk], dtype=float)
+        blackout_speeds_ms = np.array([b["v_speed_ms"] for b in blk], dtype=float)
+        mean_speed_kmh = float(np.nanmean(blackout_speeds_kmh))
+        # Heuristic: flag the whole window if any blackout sample is below
+        # either supplied threshold. (5 km/h and 2 m/s are not equivalent;
+        # the OR condition intentionally uses the broader 2 m/s cutoff.)
+        halting_heuristic = bool(
+            np.any(blackout_speeds_kmh < HALTING_SPEED_THRESHOLD_KMH)
+            or np.any(blackout_speeds_ms < HALTING_SPEED_THRESHOLD_MS)
+        )
+        # Reject speed-wise only if the entire blackout is stale/near-stationary:
+        # every vehicle-speed sample must be finite and below 5 km/h.
+        # Any window with at least one sample >= 5 km/h is retained.
+        if np.all(np.isfinite(blackout_speeds_kmh)) and np.all(
+            blackout_speeds_kmh < HALTING_SPEED_THRESHOLD_KMH
+        ):
+            rejected["fully_stale_all_speeds_below_5_kmh"] += 1
+            continue
+        if not np.isfinite(mean_speed_kmh):
+            rejected["nonfinite_mean_blackout_speed"] += 1
             continue
 
         # Reject invalid model IMU or required GT values. GPS fields may be NaN;
@@ -393,6 +415,12 @@ def build_windows(bins, stride_sec):
                 "stride_sec": stride_sec,
                 "road_label": road_label,
                 "mean_vehicle_speed_kmh": mean_speed_kmh,
+                "halting_heuristic": halting_heuristic,
+                "halting_thresholds": {
+                    "vehicle_speed_kmh_below": HALTING_SPEED_THRESHOLD_KMH,
+                    "vehicle_speed_ms_below": HALTING_SPEED_THRESHOLD_MS,
+                    "rule": "flag if any blackout sample is below either threshold",
+                },
                 "imu_lag_applied": False,
             },
         })
@@ -400,55 +428,102 @@ def build_windows(bins, stride_sec):
     return windows, rejected
 
 
+def select_nonoverlapping(windows, rng):
+    order = rng.permutation(len(windows))
+    selected, occupied = [], []
+    for idx in order:
+        w = windows[int(idx)]
+        start = w["metadata"]["window_start_sec"]
+        end = start + CONTEXT_SEC + BLACKOUT_SEC
+        if all(end <= a or start >= b for a, b in occupied):
+            selected.append(w)
+            occupied.append((start, end))
+    return selected
+
+
 def main():
-    df_s = pd.read_csv(S_PATH, encoding="latin-1")
-    df_v = pd.read_csv(V_PATH, encoding="latin-1")
-    bins = make_bins(df_s, df_v)
-    print(f"Resampled bins: {len(bins)}")
+    rng = np.random.default_rng(42)
+    selected_by_session, rejected_by_session, bins_by_session = {}, {}, {}
 
-    # Keep chronological split. Split boundary is explicit; windows are generated
-    # within each partition, so no window crosses the boundary.
-    split_idx = int(len(bins) * TRAIN_FRACTION)
-    train_bins, test_bins = bins[:split_idx], bins[split_idx:]
+    # Never concatenate raw timelines; each drive gets its own windows.
+    for sid, paths in SESSIONS.items():
+        print(f"\\nProcessing {sid}")
+        df_s = pd.read_csv(paths["s_path"], encoding="latin-1")
+        df_v = pd.read_csv(paths["v_path"], encoding="latin-1")
+        bins = make_bins(df_s, df_v)
+        bins_by_session[sid] = len(bins)
+        candidates, rejected = build_windows(bins, WINDOW_STRIDE_SEC)
+        chosen = select_nonoverlapping(candidates, rng)
+        for w in chosen:
+            w["metadata"]["session_id"] = sid
+        selected_by_session[sid] = chosen
+        rejected_by_session[sid] = dict(rejected)
+        print(f"Bins={len(bins)} candidates={len(candidates)} selected={len(chosen)}")
 
-    train_windows, train_rej = build_windows(train_bins, TRAIN_STRIDE_SEC)
-    test_windows, test_rej = build_windows(test_bins, TEST_STRIDE_SEC)
+    # Split each session 80/10/10 independently, then combine each partition.
+    splits = {"train": [], "validation": [], "test": []}
+    counts = {}
+    for sid, windows in selected_by_session.items():
+        rng.shuffle(windows)
+        n = len(windows)
+        nt, nv = int(n * TRAIN_FRACTION), int(n * VAL_FRACTION)
+        parts = {
+            "train": windows[:nt],
+            "validation": windows[nt:nt+nv],
+            "test": windows[nt+nv:],
+        }
+        counts[sid] = {k: len(v) for k, v in parts.items()}
+        for k in splits:
+            splits[k].extend(parts[k])
 
-    if not train_windows:
-        raise RuntimeError("No training windows generated; inspect data/filter thresholds.")
+    for part in splits.values():
+        rng.shuffle(part)
+    train_windows, val_windows, test_windows = (
+        splits["train"], splits["validation"], splits["test"]
+    )
+    if not train_windows or not val_windows or not test_windows:
+        raise RuntimeError("Insufficient windows to populate all splits.")
 
-    # Fit scalers on training blackout IMU only, matching the old scaling scope.
-    # This excludes all test samples and all GPS/ground-truth fields.
     scalers = {}
     for field in ("raw_accel", "raw_gyro", "gravity"):
-        values = np.vstack([w["blackout"][field] for w in train_windows])
-        scalers[field] = StandardScaler().fit(values)
+        scalers[field] = StandardScaler().fit(
+            np.vstack([w["blackout"][field] for w in train_windows])
+        )
 
     os.makedirs(OUT_DIR, exist_ok=True)
-    with open(os.path.join(OUT_DIR, "train_blackout_windows.pkl"), "wb") as f:
-        pickle.dump(train_windows, f)
-    with open(os.path.join(OUT_DIR, "test_blackout_windows.pkl"), "wb") as f:
-        pickle.dump(test_windows, f)
+    for filename, windows in (
+        ("train_blackout_windows.pkl", train_windows),
+        ("val_blackout_windows.pkl", val_windows),
+        ("test_blackout_windows.pkl", test_windows),
+    ):
+        with open(os.path.join(OUT_DIR, filename), "wb") as f:
+            pickle.dump(windows, f)
     with open(os.path.join(OUT_DIR, "scalers.pkl"), "wb") as f:
         pickle.dump(scalers, f)
     with open(os.path.join(OUT_DIR, "blackout_manifest.pkl"), "wb") as f:
         pickle.dump({
-            "hz": HZ,
-            "context_sec": CONTEXT_SEC,
-            "blackout_sec": BLACKOUT_SEC,
+            "hz": HZ, "context_sec": CONTEXT_SEC, "blackout_sec": BLACKOUT_SEC,
             "checkpoints_sec": CHECKPOINTS_SEC,
-            "train_stride_sec": TRAIN_STRIDE_SEC,
-            "test_stride_sec": TEST_STRIDE_SEC,
-            "train_count": len(train_windows),
-            "test_count": len(test_windows),
-            "train_rejected": dict(train_rej),
-            "test_rejected": dict(test_rej),
+            "candidate_stride_sec": WINDOW_STRIDE_SEC,
+            "split_fractions": {"train": TRAIN_FRACTION, "validation": VAL_FRACTION, "test": TEST_FRACTION},
+            "sessions": SESSIONS, "resampled_bins_by_session": bins_by_session,
+            "selected_counts_by_session": {k: len(v) for k, v in selected_by_session.items()},
+            "per_session_split_counts": counts,
+            "rejected_candidates_by_session": rejected_by_session,
             "imu_lag_applied": False,
-            "speed_filter": f"mean blackout vehicle speed > {MIN_MEAN_BLACKOUT_SPEED_KMH} km/h",
+            "speed_filter": "reject only if every blackout vehicle-speed sample is finite and < 5 km/h; nonfinite mean speed also rejected",
+            "halting_heuristic": {
+                "threshold_kmh": HALTING_SPEED_THRESHOLD_KMH,
+                "threshold_ms": HALTING_SPEED_THRESHOLD_MS,
+                "rule": "flag if any blackout sample is below either threshold",
+            },
         }, f)
 
-    print(f"Train windows: {len(train_windows)}; rejected: {dict(train_rej)}")
-    print(f"Test windows:  {len(test_windows)}; rejected: {dict(test_rej)}")
+    print("\\nCombined split totals:")
+    for name, windows in splits.items():
+        low = sum(w["metadata"]["halting_heuristic"] for w in windows)
+        print(f"{name}: {len(windows)} total, {low} halting/low-speed")
+    print("Per-session split counts:", counts)
     print(f"Saved outputs to {OUT_DIR}/")
 
 
