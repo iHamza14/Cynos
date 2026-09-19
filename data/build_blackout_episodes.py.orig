@@ -52,12 +52,12 @@ STEERING_ACTIVE_DEG = 8.0
 
 SESSIONS = {
     "driver_a_s4": {
-        "s_path": "Synchronised V abd S datasets/Categorised IOVNB Dataset/S (Driver A)/S4/S-S4.csv",
-        "v_path": "Synchronised V abd S datasets/Categorised IOVNB Dataset/S (Driver A)/S4/V-S4.csv",
+        "s_path": "/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/S (Driver A)/S4/S-S4.csv",
+        "v_path": "/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/S (Driver A)/S4/V-S4.csv",
     },
     "driver_e_vw04": {
-        "s_path": "Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/S-Vw4.csv",
-        "v_path": "Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/V-Vw4.csv",
+        "s_path": "/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/S-Vw4.csv",
+        "v_path": "/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/V-Vw4.csv",
     },
 }
 OUT_DIR = "data"
@@ -429,23 +429,15 @@ def build_windows(bins, stride_sec=WINDOW_STRIDE_SEC):
 
 
 def select_nonoverlapping(windows, rng):
-    # Optimal interval scheduling: sort by end time to maximize non-overlapping count
-    windows_sorted = sorted(
-        windows, 
-        key=lambda w: w["metadata"]["window_start_sec"] + CONTEXT_SEC + BLACKOUT_SEC
-    )
-    
-    selected = []
-    last_end = -float('inf')
-    
-    for w in windows_sorted:
+    order = rng.permutation(len(windows))
+    selected, occupied = [], []
+    for idx in order:
+        w = windows[int(idx)]
         start = w["metadata"]["window_start_sec"]
         end = start + CONTEXT_SEC + BLACKOUT_SEC
-        
-        if start >= last_end:
+        if all(end <= a or start >= b for a, b in occupied):
             selected.append(w)
-            last_end = end
-            
+            occupied.append((start, end))
     return selected
 
 
