@@ -122,6 +122,11 @@ def main():
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto")
+    parser.add_argument(
+        "--eval-only",
+        action="store_true",
+        help="Skip training and just evaluate the best saved model",
+    )
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -155,8 +160,17 @@ def main():
     model = DVSEModel().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    best_val_loss = float("inf")
     best_path = args.output_dir / "best_dvse.pt"
+    if args.eval_only:
+        print(f"Loading best model from {best_path} for evaluation...")
+        model.load_state_dict(torch.load(best_path, map_location=device, weights_only=False))
+        val_loss, val_dv, val_v = evaluate(model, test_loader, device)
+        print(
+            f"\n[Evaluation Results] Test Loss (Total MAE): {val_loss:.4f} m/s | Delta-V MAE: {val_dv:.4f} m/s | Absolute Velocity MAE: {val_v:.4f} m/s"
+        )
+        return
+
+    best_val_loss = float("inf")
 
     for epoch in range(1, args.epochs + 1):
         model.train()
