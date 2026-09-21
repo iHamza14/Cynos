@@ -1,0 +1,17 @@
+--- data/build_blackout_episodes.py
++++ data/build_blackout_episodes.py
+@@ -33,9 +33,9 @@
+ SESSIONS = {
+     "driver_a_s4": {
+-        "s_path": "/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/S (Driver A)/S4/S-S4.csv",
+-        "v_path": "/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/S (Driver A)/S4/V-S4.csv",
++        "s_path": "Synchronised V abd S datasets/Categorised IOVNB Dataset/S (Driver A)/S4/S-S4.csv",
++        "v_path": "Synchronised V abd S datasets/Categorised IOVNB Dataset/S (Driver A)/S4/V-S4.csv",
+     },
+     "driver_e_vw04": {
+-        "s_path": "/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/S-Vw4.csv",
+-        "v_path": "/home/wolverine/sih/2026/Cynos/Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/V-Vw4.csv",
++        "s_path": "Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/S-Vw4.csv",
++        "v_path": "Synchronised V abd S datasets/Categorised IOVNB Dataset/Vw (Driver E)/Vw04/V-Vw4.csv",
+     },
+ }
