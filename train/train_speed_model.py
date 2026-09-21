@@ -34,7 +34,7 @@ class DVSEDataset(Dataset):
         self.acc_scaler = scalers["raw_accel"]
         self.gyro_scaler = scalers["raw_gyro"]
         
-        # Remodel dataset into strict 10s chunks (T=10)
+        # Remodel dataset into strict 5s chunks (T=5)
         self.windows = []
         for item in items:
             raw_accel = item["blackout"]["raw_accel"]
@@ -43,7 +43,7 @@ class DVSEDataset(Dataset):
             vr_seed_start = item["context"]["vr_seed_ms"]
             
             total_samples = len(raw_accel)
-            chunk_size = 10 * hz
+            chunk_size = 5 * hz
             
             for k in range(total_samples // chunk_size):
                 start_idx = k * chunk_size
@@ -88,7 +88,7 @@ class DVSEDataset(Dataset):
         speeds = window["speeds"]
         vr_seed = window["v_seed"]
 
-        T = 10
+        T = 5
         target_speeds = np.zeros(T, dtype=np.float32)
         target_delta_v = np.zeros(T, dtype=np.float32)
         vr_seq = np.zeros((T, 1), dtype=np.float32)
@@ -175,6 +175,7 @@ def main():
     )
 
     train_path = args.data_dir / "train_blackout_windows.pkl"
+    val_path = args.data_dir / "val_blackout_windows.pkl"
     test_path = args.data_dir / "test_blackout_windows.pkl"
     scalers_path = args.data_dir / "scalers.pkl"
 
@@ -182,11 +183,15 @@ def main():
         raise FileNotFoundError("Missing data files. Run build script first.")
 
     train_items = load_pickle(train_path)
+    val_items = load_pickle(val_path)
     test_items = load_pickle(test_path)
     scalers = load_pickle(scalers_path)
 
     train_loader = DataLoader(
         DVSEDataset(train_items, scalers), batch_size=args.batch_size, shuffle=True
+    )
+    val_loader = DataLoader(
+        DVSEDataset(val_items, scalers), batch_size=args.batch_size, shuffle=False
     )
     test_loader = DataLoader(
         DVSEDataset(test_items, scalers), batch_size=args.batch_size, shuffle=False
@@ -230,7 +235,7 @@ def main():
 
             epoch_losses.append(loss.item())
 
-        val_loss, val_dv, val_v = evaluate(model, test_loader, device)
+        val_loss, val_dv, val_v = evaluate(model, val_loader, device)
 
         scheduler.step()
 

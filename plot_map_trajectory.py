@@ -40,7 +40,7 @@ def main():
     model.eval()
     
     # Pick the first window
-    item = test_items[0]
+    item = test_items[12]
     
     raw_acc = item["blackout"]["raw_accel"]
     raw_gyro = item["blackout"]["raw_gyro"]
@@ -58,15 +58,15 @@ def main():
     current_v_seed = vr_seed
     
     with torch.no_grad():
-        for k in range(6):
-            acc_chunk = scaled_acc[k*100 : (k+1)*100]
-            gyro_chunk = scaled_gyro[k*100 : (k+1)*100]
+        for k in range(12):
+            acc_chunk = scaled_acc[k*50 : (k+1)*50]
+            gyro_chunk = scaled_gyro[k*50 : (k+1)*50]
             
             acc_t = torch.tensor(acc_chunk, dtype=torch.float32).unsqueeze(0).to(device)
             gyro_t = torch.tensor(gyro_chunk, dtype=torch.float32).unsqueeze(0).to(device)
             
             v0_t = torch.tensor([[current_v_seed]], dtype=torch.float32).to(device)
-            vr_t = torch.full((1, 10, 1), current_v_seed, dtype=torch.float32).to(device)
+            vr_t = torch.full((1, 5, 1), current_v_seed, dtype=torch.float32).to(device)
             
             _, v_pred, _, _ = model(acc_t, gyro_t, vr_t, v_0=v0_t)
             v_pred_np = v_pred.numpy()[0]
@@ -119,7 +119,7 @@ def main():
     
     plt.scatter([0], [0], color="black", s=100, label="Blackout Start", zorder=5)
     
-    plt.title("Map Trajectory: Dead-Reckoning (Speed Model + True Heading)", fontsize=14)
+    plt.title("Map Trajectory for Window 13 (Speed Model + True Heading)", fontsize=14)
     plt.xlabel("East Displacement (meters)", fontsize=12)
     plt.ylabel("North Displacement (meters)", fontsize=12)
     plt.grid(True, alpha=0.3)
