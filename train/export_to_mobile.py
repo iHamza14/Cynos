@@ -50,9 +50,9 @@ def export_models():
     dvse_model.eval()
 
     # Dummy inputs: [1, 100, 3] for IMU, [1, 10, 1] for VR sequence, [1, 1] for initial velocity
-    dummy_acc_window = torch.randn(1, 100, 3, dtype=torch.float32)
-    dummy_gyro_window = torch.randn(1, 100, 3, dtype=torch.float32)
-    dummy_vr_seq = torch.randn(1, 10, 1, dtype=torch.float32)
+    dummy_acc_window = torch.randn(1, 50, 3, dtype=torch.float32)
+    dummy_gyro_window = torch.randn(1, 50, 3, dtype=torch.float32)
+    dummy_vr_seq = torch.randn(1, 5, 1, dtype=torch.float32)
     dummy_v0 = torch.randn(1, 1, dtype=torch.float32)
 
     # Note: DVSE forward has `hz=10` as a default kwarg.
