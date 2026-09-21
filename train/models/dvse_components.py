@@ -11,9 +11,9 @@ class NCN(nn.Module):
         super().__init__()
         self.acc_embed = nn.Sequential(nn.Linear(18, 32), nn.ReLU(), nn.Linear(32, 64), nn.ReLU())
         self.gyro_embed = nn.Sequential(nn.Linear(18, 32), nn.ReLU(), nn.Linear(32, 64), nn.ReLU())
-        self.gru = nn.GRU(input_size=128, hidden_size=128, num_layers=1, batch_first=True)
+        self.gru = nn.GRU(input_size=128, hidden_size=128*2, num_layers=1, batch_first=True)
         self.regression = nn.Sequential(
-            nn.Linear(129, 64),
+            nn.Linear(257, 64),
             nn.ReLU(),
             nn.Linear(64, 32),
             nn.ReLU(),

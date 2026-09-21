@@ -26,43 +26,78 @@ def load_pickle(path):
 
 
 class DVSEDataset(Dataset):
-    """Enterprise class definition for DVSEDataset."""
+    """Enterprise class definition for DVSEDataset remodeled for 10s windows."""
 
-    def __init__(self, items, scalers, hz=10):
-        """Initializes the instance."""
-        self.items = items
+    def __init__(self, items, scalers, hz=10, is_train=False):
+        self.is_train = is_train
+        self.hz = hz
         self.acc_scaler = scalers["raw_accel"]
         self.gyro_scaler = scalers["raw_gyro"]
-        self.hz = hz
+        
+        # Remodel dataset into strict 10s chunks (T=10)
+        self.windows = []
+        for item in items:
+            raw_accel = item["blackout"]["raw_accel"]
+            raw_gyro = item["blackout"]["raw_gyro"]
+            speeds = item["ground_truth"]["speeds_ms"]
+            vr_seed_start = item["context"]["vr_seed_ms"]
+            
+            total_samples = len(raw_accel)
+            chunk_size = 10 * hz
+            
+            for k in range(total_samples // chunk_size):
+                start_idx = k * chunk_size
+                end_idx = start_idx + chunk_size
+                
+                acc_chunk = raw_accel[start_idx:end_idx]
+                gyro_chunk = raw_gyro[start_idx:end_idx]
+                speed_chunk = speeds[start_idx:end_idx]
+                
+                if k == 0:
+                    v_seed = vr_seed_start
+                else:
+                    v_seed = speeds[start_idx - 1]
+                    
+                self.windows.append({
+                    "acc": acc_chunk,
+                    "gyro": gyro_chunk,
+                    "speeds": speed_chunk,
+                    "v_seed": v_seed
+                })
 
     def __len__(self):
-        """Executes core logic for __len__."""
-        return len(self.items)
+        return len(self.windows)
 
     def __getitem__(self, idx):
-        """Executes core logic for __getitem__."""
-        item = self.items[idx]
+        window = self.windows[idx]
+        
+        # 1. Prepare raw tensors
+        raw_accel = torch.tensor(window["acc"], dtype=torch.float32)
+        raw_gyro = torch.tensor(window["gyro"], dtype=torch.float32)
 
-        raw_accel = item["blackout"]["raw_accel"]
-        raw_gyro = item["blackout"]["raw_gyro"]
+        # 2. Apply random rotation to RAW tensors if training (using Section 7 spec)
+        if self.is_train:
+            import math
+            from models.dvse_physics import apply_random_rotation_augmentation
+            raw_accel, raw_gyro = apply_random_rotation_augmentation(raw_accel, raw_gyro, max_angle_rad=math.pi)
 
-        acc_scaled = self.acc_scaler.transform(raw_accel)
-        gyro_scaled = self.gyro_scaler.transform(raw_gyro)
+        # 3. Convert back to numpy for scaling, then back to tensor
+        acc_scaled = self.acc_scaler.transform(raw_accel.numpy())
+        gyro_scaled = self.gyro_scaler.transform(raw_gyro.numpy())
 
-        speeds = item["ground_truth"]["speeds_ms"]  # [600]
-        vr_seed = item["context"]["vr_seed_ms"]
+        speeds = window["speeds"]
+        vr_seed = window["v_seed"]
 
-        # Calculate 1Hz targets and V_r sequence
-        T = len(speeds) // self.hz
+        T = 10
         target_speeds = np.zeros(T, dtype=np.float32)
         target_delta_v = np.zeros(T, dtype=np.float32)
         vr_seq = np.zeros((T, 1), dtype=np.float32)
 
         v_prev = vr_seed
         for i in range(T):
-            target_speeds[i] = speeds[(i + 1) * self.hz - 1]  # speed at the end of the second
+            target_speeds[i] = speeds[(i + 1) * self.hz - 1]
             target_delta_v[i] = target_speeds[i] - v_prev
-            vr_seq[i, 0] = v_prev
+            vr_seq[i, 0] = vr_seed  # Scalar value repeated
             v_prev = target_speeds[i]
 
         return {
@@ -158,7 +193,8 @@ def main():
     )
 
     model = DVSEModel().to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     best_path = args.output_dir / "best_dvse.pt"
     if args.eval_only:
@@ -195,6 +231,8 @@ def main():
             epoch_losses.append(loss.item())
 
         val_loss, val_dv, val_v = evaluate(model, test_loader, device)
+
+        scheduler.step()
 
         print(
             f"Epoch {epoch:03d}/{args.epochs} - Train Loss: {np.mean(epoch_losses):.4f} - "
