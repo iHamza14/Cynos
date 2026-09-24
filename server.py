@@ -1,3 +1,7 @@
+"""
+Utility module: server.py.
+"""
+
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 import os
 

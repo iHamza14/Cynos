@@ -1,3 +1,7 @@
+"""
+Utility module: summarize_drift.py.
+"""
+
 import pandas as pd
 
 df = pd.read_csv("map_output/detailed_drift_1hz.csv")

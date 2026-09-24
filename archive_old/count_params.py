@@ -1,3 +1,7 @@
+"""
+Utility module: count_params.py.
+"""
+
 import torch
 from train.models import DVSEModel, GyroTCN
 

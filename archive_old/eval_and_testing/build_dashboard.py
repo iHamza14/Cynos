@@ -1,3 +1,7 @@
+"""
+Utility module: build_dashboard.py.
+"""
+
 import json
 
 with open("live_simulation_log.json", "r") as f:
