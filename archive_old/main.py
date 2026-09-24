@@ -1,3 +1,7 @@
+"""
+Utility module: main.py.
+"""
+
 def main():
     print("Hello from cynos!")
 

@@ -23,7 +23,6 @@
 /data_preprocessing/output/
 
 # Generated plots
-/plots/
 /plots2/
 /heading_diagnostics/
 
@@ -40,7 +39,6 @@ data/tcn_test_episode_*.png
 data/*.pkl
 data/*.pt
 gyro_tcn_output/
-plots/
 plots2/
 heading_diagnostics/
 data/heading_diagnostic/

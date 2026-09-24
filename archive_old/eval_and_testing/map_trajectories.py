@@ -19,7 +19,7 @@ import torch
 import folium
 import math
 
-from models import DVSEModel, GyroTCN
+from model.velocity.velocity_estimator import DVSEModel, GyroTCN
 from viterbi_snapper import ViterbiSnapper, SimpleRoadGraph, haversine
 
 HZ = 10.0

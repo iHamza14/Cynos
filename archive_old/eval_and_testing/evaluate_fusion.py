@@ -14,9 +14,15 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import torch
 
-from models import DVSEModel, GyroTCN
+from model.velocity.velocity_estimator import DVSEModel, GyroTCN
 
 HZ = 10.0
 CHECKPOINTS_SEC = [2, 5, 10, 15, 30, 60]

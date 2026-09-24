@@ -1,3 +1,7 @@
+"""
+Utility module: calculate_viterbi_sih_checkpoints.py.
+"""
+
 import pandas as pd
 import pickle
 import numpy as np

@@ -1,3 +1,7 @@
+"""
+Utility module: calculate_sih_metrics.py.
+"""
+
 import pandas as pd
 import pickle
 
