@@ -70,3 +70,8 @@ The evaluation pipeline tests the models over various 60-second complete GPS bla
 *Scatter plot comparing the DVSE model's predicted velocity against the true ground truth vehicle velocity. Demonstrates strong correlation with minimal mean absolute error (MAE).*
 
 ![Velocity Scatter Plot](evaluation/plots/velocity_scatter.png)
+
+### 4. Heading Prediction (GyroTCN)
+*Line graph illustrating the integrated heading change over a random 60-second test window. It compares the ground truth heading change against the denoised predictions from the GyroTCN model.*
+
+![Heading Change Plot](evaluation/plots/heading_change_plot.png)
