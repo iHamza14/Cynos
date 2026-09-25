@@ -12,11 +12,29 @@ from .physics_layer import euler_to_rotation_matrix, physics_velocity_update
 class DVSEModel(nn.Module):
     """Enterprise class definition for DVSEModel."""
 
-    def __init__(self):
+    def __init__(self,scalers):
         """Initializes the instance."""
         super().__init__()
         self.ncn = NCN()
         self.mtn = MTN()
+        self.register_buffer(
+            "acc_feat_mean",
+            torch.tensor(scalers["acc_features"].mean_, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "acc_feat_scale",
+            torch.tensor(scalers["acc_features"].scale_, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "gyro_feat_mean",
+            torch.tensor(scalers["gyro_features"].mean_, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "gyro_feat_scale",
+            torch.tensor(scalers["gyro_features"].scale_, dtype=torch.float32),
+        )
+    def scale_features(self, x, mean, scale):
+        return (x - mean) / scale
 
     def forward(self, acc_window, gyro_window, v_r, v_0=None, hz=10):
         """
@@ -30,7 +48,12 @@ class DVSEModel(nn.Module):
         # Feature Extraction
         acc_feat = extract_1sec_features(acc_window, hz=hz)  # [B, T, 18]
         gyro_feat = extract_1sec_features(gyro_window, hz=hz)  # [B, T, 18]
-
+        acc_feat = self.scale_features(
+            acc_feat, self.acc_feat_mean, self.acc_feat_scale
+        )
+        gyro_feat = self.scale_features(
+            gyro_feat, self.gyro_feat_mean, self.gyro_feat_scale
+        )
         # NCN (Fast Parallel since v_r is known)
         N_dist = self.ncn(acc_feat, gyro_feat, v_r)  # [B, T, 1]
 

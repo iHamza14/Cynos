@@ -92,13 +92,11 @@ class DVSEDataset(Dataset):
             raw_accel, raw_gyro = apply_random_rotation_augmentation(raw_accel, raw_gyro, max_angle_rad=math.pi)
 
         # 3. Convert back to numpy for scaling, then back to tensor
-        acc_scaled = self.acc_scaler.transform(raw_accel.numpy())
-        gyro_scaled = self.gyro_scaler.transform(raw_gyro.numpy())
 
         speeds = window["speeds"]
         vr_seed = window["v_seed"]
 
-        T = 5
+        T = 10
         target_speeds = np.zeros(T, dtype=np.float32)
         target_delta_v = np.zeros(T, dtype=np.float32)
         vr_seq = np.zeros((T, 1), dtype=np.float32)
@@ -111,8 +109,8 @@ class DVSEDataset(Dataset):
             v_prev = target_speeds[i]
 
         return {
-            "acc_window": torch.tensor(acc_scaled, dtype=torch.float32),
-            "gyro_window": torch.tensor(gyro_scaled, dtype=torch.float32),
+            "acc_window": torch.tensor(raw_accel, dtype=torch.float32),
+            "gyro_window": torch.tensor(raw_gyro, dtype=torch.float32),
             "vr_seq": torch.tensor(vr_seq, dtype=torch.float32),
             "v_0": torch.tensor([vr_seed], dtype=torch.float32),
             "target_speeds": torch.tensor(target_speeds, dtype=torch.float32),
@@ -207,7 +205,7 @@ def main():
         DVSEDataset(test_items, scalers), batch_size=args.batch_size, shuffle=False
     )
 
-    model = DVSEModel().to(device)
+    model = DVSEModel(scalers).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 

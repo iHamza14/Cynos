@@ -465,6 +465,72 @@ def select_nonoverlapping(windows, rng):
 
     return selected
 
+import numpy as np
+
+
+def extract_1sec_features(window, hz=10):
+    """
+    Extract 1-second statistical features for a 3-axis sensor.
+
+    Features per axis:
+        std, max, min, rms, skewness, kurtosis
+
+    Args:
+        window: NumPy array of shape [L, 3].
+        hz: Sampling rate in Hz.
+
+    Returns:
+        NumPy array of shape [T, 18], where T = L // hz.
+    """
+    window = np.asarray(window, dtype=np.float32)
+
+    if window.ndim != 2 or window.shape[1] != 3:
+        raise ValueError(
+            f"Expected window shape [L, 3], got {window.shape}"
+        )
+
+    if hz <= 0:
+        raise ValueError(f"hz must be positive, got {hz}")
+
+    T = len(window) // hz
+
+    if T == 0:
+        return np.empty((0, 18), dtype=np.float32)
+
+    # [T, hz, 3]
+    windows = window[: T * hz].reshape(T, hz, 3)
+
+    mean = np.mean(windows, axis=1, keepdims=True)
+    std = np.std(windows, axis=1, ddof=0, keepdims=True)
+
+    max_val = np.max(windows, axis=1, keepdims=True)
+    min_val = np.min(windows, axis=1, keepdims=True)
+
+    rms = np.sqrt(
+        np.mean(windows**2, axis=1, keepdims=True)
+    )
+
+    eps = 1e-8
+
+    skew = (
+        np.mean((windows - mean) ** 3, axis=1, keepdims=True)
+        / (std**3 + eps)
+    )
+
+    kurt = (
+        np.mean((windows - mean) ** 4, axis=1, keepdims=True)
+        / (std**4 + eps)
+        - 3.0
+    )
+
+    # [T, 1, 18]
+    features = np.concatenate(
+        [std, max_val, min_val, rms, skew, kurt],
+        axis=2,
+    )
+
+    # [T, 18]
+    return features[:, 0, :]
 
 def main():
     """Executes core logic for main."""
@@ -513,10 +579,27 @@ def main():
         raise RuntimeError("Insufficient windows to populate all splits.")
 
     scalers = {}
-    for field in ("raw_accel", "raw_gyro", "gravity"):
-        scalers[field] = StandardScaler().fit(
-            np.vstack([w["blackout"][field] for w in train_windows])
-        )
+
+    acc_features = []
+    gyro_features = []
+
+    for w in train_windows:
+        acc = w["blackout"]["raw_accel"]
+        gyro = w["blackout"]["raw_gyro"]
+
+        acc_feat = extract_1sec_features(acc, hz=HZ)
+        gyro_feat = extract_1sec_features(gyro, hz=HZ)
+
+        acc_features.append(acc_feat)
+        gyro_features.append(gyro_feat)
+
+    scalers["acc_features"] = StandardScaler().fit(
+        np.vstack(acc_features)
+    )
+
+    scalers["gyro_features"] = StandardScaler().fit(
+        np.vstack(gyro_features)
+    )
 
     os.makedirs(OUT_DIR, exist_ok=True)
     for filename, windows in (
