@@ -42,7 +42,7 @@ class DVSEDataset(Dataset):
         self.is_train = is_train
         self.hz = hz
         
-        # Remodel dataset into strict 5s chunks (T=5)
+        # Remodel dataset into strict 10s chunks (T=10)
         self.windows = []
         for item in items:
             raw_accel = item["blackout"]["raw_accel"]
@@ -51,7 +51,7 @@ class DVSEDataset(Dataset):
             vr_seed_start = item["context"]["vr_seed_ms"]
             
             total_samples = len(raw_accel)
-            chunk_size = 5 * hz
+            chunk_size = 10 * hz
             
             for k in range(total_samples // chunk_size):
                 start_idx = k * chunk_size

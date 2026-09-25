@@ -9,7 +9,9 @@ import pickle
 import sys
 
 # Ensure models can be imported
-sys.path.append("train")
+import os
+if os.path.abspath(".") not in sys.path:
+    sys.path.append(os.path.abspath("."))
 from model.velocity.velocity_estimator import DVSEModel
 
 def plot_velocity_for_window(window_index=12):
@@ -25,8 +27,8 @@ def plot_velocity_for_window(window_index=12):
         
     # 2. Load DVSE Model
     print("Loading DVSE model...")
-    model = DVSEModel().to(device)
-    model.load_state_dict(torch.load("train/dvse_output/best_dvse.pt", map_location=device, weights_only=False))
+    model = DVSEModel(scalers).to(device)
+    model.load_state_dict(torch.load("dvse_output/best_dvse.pt", map_location=device, weights_only=False))
     model.eval()
     
     # 3. Extract the specific blackout window
@@ -36,8 +38,6 @@ def plot_velocity_for_window(window_index=12):
     gt_speeds = item["ground_truth"]["speeds_ms"]
     vr_seed = item["context"]["vr_seed_ms"]
     
-    scaled_acc = scalers["raw_accel"].transform(raw_acc)
-    scaled_gyro = scalers["raw_gyro"].transform(raw_gyro)
     
     predicted_speeds = []
     current_v_seed = vr_seed
@@ -45,15 +45,15 @@ def plot_velocity_for_window(window_index=12):
     # 4. Perform 5-second (50 sample) leaping inference
     print(f"Running inference for Window {window_index+1}...")
     with torch.no_grad():
-        for k in range(12):
-            acc_chunk = scaled_acc[k*50 : (k+1)*50]
-            gyro_chunk = scaled_gyro[k*50 : (k+1)*50]
+        for k in range(6):
+            acc_chunk = raw_acc[k*100 : (k+1)*100]
+            gyro_chunk = raw_gyro[k*100 : (k+1)*100]
             
             acc_t = torch.tensor(acc_chunk, dtype=torch.float32).unsqueeze(0).to(device)
             gyro_t = torch.tensor(gyro_chunk, dtype=torch.float32).unsqueeze(0).to(device)
             
             v0_t = torch.tensor([[current_v_seed]], dtype=torch.float32).to(device)
-            vr_t = torch.full((1, 5, 1), current_v_seed, dtype=torch.float32).to(device)
+            vr_t = torch.full((1, 10, 1), current_v_seed, dtype=torch.float32).to(device)
             
             _, v_pred, _, _ = model(acc_t, gyro_t, vr_t, v_0=v0_t)
             v_pred_np = v_pred.numpy()[0]
@@ -83,8 +83,8 @@ def plot_velocity_for_window(window_index=12):
     plt.legend(fontsize=14)
     
     plt.tight_layout()
-    plt.savefig(f"velocity_comparison_window_{window_index+1}.png", dpi=150)
-    print(f"Success! Saved as velocity_comparison_window_{window_index+1}.png")
+    plt.savefig(f"evaluation/plots/velocity_comparison_window_{window_index+1}.png", dpi=150)
+    print(f"Success! Saved as evaluation/plots/velocity_comparison_window_{window_index+1}.png")
 
 if __name__ == "__main__":
-    plot_velocity_for_window(12)  # 12 is Window 13
+    plot_velocity_for_window(0)  # 12 is Window 13

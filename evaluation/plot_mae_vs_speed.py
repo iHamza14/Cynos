@@ -8,8 +8,10 @@ import matplotlib.pyplot as plt
 import pickle
 import sys
 
-sys.path.append("train")
-from train_speed_model import DVSEDataset
+import os
+if os.path.abspath(".") not in sys.path:
+    sys.path.append(os.path.abspath("."))
+from train.velocity.train import DVSEDataset
 from model.velocity.velocity_estimator import DVSEModel
 from torch.utils.data import DataLoader
 
@@ -24,8 +26,8 @@ def main():
     dataset = DVSEDataset(test_items, scalers)
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
     
-    model = DVSEModel().to(device)
-    model.load_state_dict(torch.load("train/dvse_output/best_dvse.pt", map_location=device, weights_only=False))
+    model = DVSEModel(scalers).to(device)
+    model.load_state_dict(torch.load("dvse_output/best_dvse.pt", map_location=device, weights_only=False))
     model.eval()
     
     all_gt = []
@@ -76,8 +78,8 @@ def main():
     plt.legend(fontsize=12)
     
     plt.tight_layout()
-    plt.savefig("mae_vs_speed.png", dpi=150)
-    print("Plot saved to mae_vs_speed.png")
+    plt.savefig("evaluation/plots/mae_vs_speed.png", dpi=150)
+    print("Plot saved to evaluation/plots/mae_vs_speed.png")
 
 if __name__ == "__main__":
     main()

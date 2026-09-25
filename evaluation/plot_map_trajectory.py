@@ -9,7 +9,9 @@ import pickle
 import sys
 import math
 
-sys.path.append("train")
+import os
+if os.path.abspath(".") not in sys.path:
+    sys.path.append(os.path.abspath("."))
 from model.velocity.velocity_estimator import DVSEModel
 
 EARTH_R = 6371000.0
@@ -39,8 +41,8 @@ def main():
     with open("data/scalers.pkl", "rb") as f:
         scalers = pickle.load(f)
         
-    model = DVSEModel().to(device)
-    model.load_state_dict(torch.load("train/dvse_output/best_dvse.pt", map_location=device, weights_only=False))
+    model = DVSEModel(scalers).to(device)
+    model.load_state_dict(torch.load("dvse_output/best_dvse.pt", map_location=device, weights_only=False))
     model.eval()
     
     # Pick the first window
@@ -55,22 +57,20 @@ def main():
     start_lon = item["ground_truth"]["start_lon"]
     vr_seed = item["context"]["vr_seed_ms"]
     
-    scaled_acc = scalers["raw_accel"].transform(raw_acc)
-    scaled_gyro = scalers["raw_gyro"].transform(raw_gyro)
     
     predicted_60s = []
     current_v_seed = vr_seed
     
     with torch.no_grad():
-        for k in range(12):
-            acc_chunk = scaled_acc[k*50 : (k+1)*50]
-            gyro_chunk = scaled_gyro[k*50 : (k+1)*50]
+        for k in range(6):
+            acc_chunk = raw_acc[k*100 : (k+1)*100]
+            gyro_chunk = raw_gyro[k*100 : (k+1)*100]
             
             acc_t = torch.tensor(acc_chunk, dtype=torch.float32).unsqueeze(0).to(device)
             gyro_t = torch.tensor(gyro_chunk, dtype=torch.float32).unsqueeze(0).to(device)
             
             v0_t = torch.tensor([[current_v_seed]], dtype=torch.float32).to(device)
-            vr_t = torch.full((1, 5, 1), current_v_seed, dtype=torch.float32).to(device)
+            vr_t = torch.full((1, 10, 1), current_v_seed, dtype=torch.float32).to(device)
             
             _, v_pred, _, _ = model(acc_t, gyro_t, vr_t, v_0=v0_t)
             v_pred_np = v_pred.numpy()[0]
@@ -131,8 +131,9 @@ def main():
     plt.axis("equal")
     
     plt.tight_layout()
-    plt.savefig("map_trajectory_2d.png", dpi=150)
-    print("Saved 2D map plot to map_trajectory_2d.png")
+    os.makedirs("evaluation/plots", exist_ok=True)
+    plt.savefig("evaluation/plots/map_trajectory_2d.png", dpi=150)
+    print("Saved 2D map plot to evaluation/plots/map_trajectory_2d.png")
     
     # --- 2. FOLIUM INTERACTIVE MAP ---
     try:
@@ -144,8 +145,8 @@ def main():
         
         folium.Marker([start_lat, start_lon], popup="GPS Lost Here", icon=folium.Icon(color="red", icon="info-sign")).add_to(m)
         
-        m.save("map_trajectory.html")
-        print("Saved interactive map to map_trajectory.html")
+        m.save("evaluation/plots/map_trajectory.html")
+        print("Saved interactive map to evaluation/plots/map_trajectory.html")
     except ImportError:
         print("Folium not installed, skipping interactive HTML map.")
 
