@@ -3,7 +3,43 @@
 This repository contains the training, evaluation, and deployment pipeline for a robust inertial navigation system designed to provide continuous vehicle tracking during GPS signal loss (blackouts).
 
 ## General Architecture
-The system relies on a fused Dead-Reckoning (DR) engine utilizing two primary deep learning components alongside physical kinematics and map-matching logic:
+
+Our system uses a smartphone’s accelerometer and gyroscope during a GNSS blackout. We combine a learned velocity/noise-compensation model, a causal TCN for phone-to-vehicle orientation, a separate gyro-based heading estimator, physics-based motion reconstruction, and road-network constraints to maintain a continuous trajectory.
+
+```text
+                 GNSS AVAILABLE
+                       │
+              p₀, v₀, heading₀
+                       │
+                       ▼
+                GNSS BLACKOUT
+                       │
+                Smartphone IMU
+                   10 Hz
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+      DVSE velocity             GyroTCN
+          │                      heading
+          │                         │
+          └──────────┬──────────────┘
+                     ▼
+             Physics / DR
+                     │
+                     ▼
+             Dead-reckoned path
+                     │
+                     ▼
+            OSM / Viterbi matching
+                     │
+                     ▼
+               Position @ 1 Hz
+                     │
+                     ▼
+              GNSS RESTORED
+```
+
+### Components
 
 1. **Deep Velocity Speed Estimator (DVSE):**
    - Ingests raw IMU data (Accelerometer and Gyroscope) and pre-integrates it.

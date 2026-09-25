@@ -41,8 +41,6 @@ class DVSEDataset(Dataset):
     def __init__(self, items, scalers, hz=10, is_train=False):
         self.is_train = is_train
         self.hz = hz
-        self.acc_scaler = scalers["raw_accel"]
-        self.gyro_scaler = scalers["raw_gyro"]
         
         # Remodel dataset into strict 5s chunks (T=5)
         self.windows = []
@@ -96,7 +94,7 @@ class DVSEDataset(Dataset):
         speeds = window["speeds"]
         vr_seed = window["v_seed"]
 
-        T = 10
+        T = len(speeds) // self.hz
         target_speeds = np.zeros(T, dtype=np.float32)
         target_delta_v = np.zeros(T, dtype=np.float32)
         vr_seq = np.zeros((T, 1), dtype=np.float32)

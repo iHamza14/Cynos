@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 import pickle
 
 import sys
-sys.path.append("train")
-from train_speed_model import DVSEDataset
+sys.path.append(".") 
+from train.velocity.train import DVSEDataset
 from model.velocity.velocity_estimator import DVSEModel
 from torch.utils.data import DataLoader
 
@@ -24,8 +24,8 @@ def main():
     dataset = DVSEDataset(test_items, scalers)
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
     
-    model = DVSEModel().to(device)
-    model.load_state_dict(torch.load("train/dvse_output/best_dvse.pt", map_location=device, weights_only=False))
+    model = DVSEModel(scalers).to(device)
+    model.load_state_dict(torch.load("dvse_output/best_dvse.pt", map_location=device, weights_only=False))
     model.eval()
     
     all_gt = []
